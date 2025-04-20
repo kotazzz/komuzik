@@ -1,0 +1,28 @@
+# Git files
+.git/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Poetry / Virtual environment
+.venv/
+.env
+# Keep poetry.lock in the image for reproducible builds
+# poetry.lock
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE / Editor specific
+.vscode/
+.idea/
+*.sublime-*
+
+# OS specific
+.DS_Store
+Thumbs.db
