@@ -7,3 +7,4 @@ services:
     restart: unless-stopped
     volumes:
       - ./session:/app/session
+      - ./data:/app/data
