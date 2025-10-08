@@ -24,8 +24,9 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SESSION_STRING = os.getenv("SESSION_STRING", "")  # For StringSession if needed
 
-# YouTube URL regex pattern
+# URL regex patterns
 YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
+TIKTOK_REGEX = r'(https?://)?(www\.|vm\.|vt\.)?(tiktok\.com)/(\S+)'
 
 # Ensure session directory exists
 os.makedirs("session", exist_ok=True)
@@ -296,12 +297,83 @@ async def send_youtube_audio(event: Message, url: str, quality: str = 'high'):
             logger.error(f"Error sending audio: {e}")
             await event.respond(f"Произошла ошибка при обработке аудио: {str(e)}")
 
+async def send_tiktok_video(event: Message, url: str):
+    """Download and send a TikTok video directly without quality selection."""
+    async with event.client.action(event.chat_id, 'video'):
+        try:
+            # Send "Processing" message
+            processing_msg = await event.respond("Загрузка TikTok видео... Пожалуйста, подождите.")
+            
+            logger.info(f"Downloading TikTok video: {url}")
+            
+            # Download TikTok video
+            temp_dir = tempfile.mkdtemp()
+            try:
+                ydl_opts = {
+                    'format': 'best',
+                    'outtmpl': f'{temp_dir}/%(id)s.%(ext)s',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
+                    video_id = info.get('id', 'video')
+                    ext = info.get('ext', 'mp4')
+                    duration = int(info.get('duration', 0))
+                    width = info.get('width', 0)
+                    height = info.get('height', 0)
+                    
+                    # Download
+                    await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
+                    
+                    video_path = f"{temp_dir}/{video_id}.{ext}"
+                
+                logger.info(f"TikTok video downloaded successfully: {video_path}")
+                
+                # Send the video
+                caption = ""
+                if BOT_USERNAME:
+                    caption = f"@{BOT_USERNAME}"
+                
+                video_attr = DocumentAttributeVideo(
+                    duration=duration,
+                    w=width if width > 0 else 720,
+                    h=height if height > 0 else 1280,
+                    supports_streaming=True
+                )
+                
+                await event.respond(
+                    caption,
+                    file=video_path,
+                    supports_streaming=True,
+                    attributes=[video_attr]
+                )
+                
+                # Delete the processing message
+                await processing_msg.delete()
+                
+                # Clean up
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    
+            except Exception:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise
+        
+        except Exception as e:
+            logger.error(f"Error sending TikTok video: {e}")
+            await event.respond(f"Произошла ошибка при обработке TikTok видео: {str(e)}")
+
 @client.on(events.NewMessage(pattern='/start'))
 async def start_handler(event: Message):
     """Handle /start command."""
     await event.respond(
-        "👋 Привет! Я бот для скачивания видео и музыки с YouTube.\n\n"
-        "Просто отправьте мне ссылку на видео, и я предложу варианты загрузки.\n\n"
+        "👋 Привет! Я бот для скачивания видео и музыки с YouTube и TikTok.\n\n"
+        "📺 **YouTube**: выбирайте качество видео и аудио\n"
+        "🎵 **TikTok**: автоматическая загрузка видео\n\n"
+        "Просто отправьте мне ссылку на видео!\n\n"
         "Для получения помощи используйте команду /help."
     )
 
@@ -310,14 +382,18 @@ async def help_handler(event: Message):
     """Handle /help command."""
     await event.respond(
         "🔍 **Как пользоваться ботом:**\n\n"
-        "1. Отправьте мне ссылку на видео YouTube\n"
-        "2. Используйте /search для поиска видео по запросу\n"
-        "3. Выберите тип контента (видео или аудио) и качество с помощью кнопок\n"
-        "4. Дождитесь загрузки и получите файл\n\n"
+        "1. Отправьте мне ссылку на видео YouTube или TikTok\n"
+        "2. Используйте /search для поиска видео на YouTube\n"
+        "3. Для YouTube: выберите тип контента (видео или аудио) и качество\n"
+        "4. Для TikTok: видео скачается автоматически\n"
+        "5. Дождитесь загрузки и получите файл\n\n"
         "📌 **Доступные команды:**\n"
         "/start - Запустить бота\n"
         "/help - Показать справку\n"
-        "/search <запрос> - Поиск видео на YouTube"
+        "/search <запрос> - Поиск видео на YouTube\n\n"
+        "🎬 **Поддерживаемые платформы:**\n"
+        "• YouTube (с выбором качества)\n"
+        "• TikTok (автоматическая загрузка)"
     )
 
 @client.on(events.NewMessage(pattern=r'^/search(?:\s+(.+))?'))
@@ -354,14 +430,22 @@ async def search_handler(event: Message):
 
 @client.on(events.NewMessage())
 async def message_handler(event: Message):
-    """Handle incoming messages with YouTube links."""
+    """Handle incoming messages with YouTube and TikTok links."""
     if event.message.text.startswith('/'):  # Skip other commands
+        return
+    
+    # Check if the message contains a TikTok link
+    tiktok_match = re.search(TIKTOK_REGEX, event.message.text)
+    if tiktok_match:
+        tiktok_url = tiktok_match.group(0)
+        # For TikTok, download directly without options
+        await send_tiktok_video(event, tiktok_url)
         return
     
     # Check if the message contains a YouTube link
     youtube_match = re.search(YOUTUBE_REGEX, event.message.text)
     if not youtube_match:
-        await event.respond("Пожалуйста, отправьте корректную ссылку на видео YouTube.")
+        await event.respond("Пожалуйста, отправьте корректную ссылку на видео YouTube или TikTok.")
         return
     
     youtube_url = youtube_match.group(0)
