@@ -5,18 +5,5 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    # depends_on: - telegram-bot-api # Удаляем зависимость
-    # Добавляем volume для хранения файла сессии Pyrogram
     volumes:
-      - ./session:/app/session # Том для файла сессии Pyrogram
-    # Если вы монтировали другие тома, оставьте их
-    #   - ./data:/app/data
-
-  # Удаляем весь сервис telegram-bot-api
-  # telegram-bot-api:
-  #   image: aiogram/telegram-bot-api:latest
-  #   ... (вся конфигурация удалена) ...
-
-# Удаляем volume telegram-bot-api-data, если он больше не нужен
-# volumes:
-#   telegram-bot-api-data:
+      - ./session:/app/session

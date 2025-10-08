@@ -2,24 +2,20 @@
 name = "komuzik"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Kotaz",email = "semechkagent@gmail.com"}
-]
-readme = "README.md"
+authors = [{ name = "Kotaz", email = "semechkagent@gmail.com" }]
 requires-python = ">=3.10,<4.0"
+readme = "README.md"
 dependencies = [
-    "aiogram (>=3.20.0.post0,<4.0.0)",
     "yt-dlp (>=2025.3.31,<2026.0.0)",
     "python-dotenv (>=1.1.0,<2.0.0)",
-    "pyrogram[asyncio] (>=2.0.0,<3.0.0)", # Добавляем Pyrogram
-    "tgcrypto", # Нужен для Pyrogram
-    "telethon (>=1.33.0,<2.0.0)" # Client API for Telegram with large file support
+    "pyrogram[asyncio] (>=2.0.0,<3.0.0)",
+    "tgcrypto",
+    "telethon (>=1.33.0,<2.0.0)",
 ]
 
-
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.poetry]
-package-mode = false
+[tool.uv]
+package = false
