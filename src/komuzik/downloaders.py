@@ -24,6 +24,44 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
+def _find_downloaded_file(temp_dir: str, expected_extension: str = None) -> str:
+    """Find and verify downloaded file in temp directory.
+    
+    Args:
+        temp_dir: Directory to search in
+        expected_extension: Optional expected file extension (e.g., 'mp3')
+        
+    Returns:
+        Full path to the downloaded file
+        
+    Raises:
+        Exception: If no files found, no valid media files, or file is empty
+    """
+    files = os.listdir(temp_dir)
+    if not files:
+        raise Exception("No files downloaded")
+    
+    # Filter out thumbnails
+    media_files = [f for f in files if not f.endswith(('.jpg', '.png', '.webp'))]
+    
+    # If expected extension specified, try to find file with that extension first
+    if expected_extension:
+        exact_match = [f for f in media_files if f.endswith(f'.{expected_extension}')]
+        if exact_match:
+            media_files = exact_match
+    
+    if not media_files:
+        raise Exception("No media file found in download directory")
+    
+    file_path = os.path.join(temp_dir, media_files[0])
+    
+    # Verify file is not empty
+    if os.path.getsize(file_path) == 0:
+        raise Exception("The downloaded file is empty")
+    
+    return file_path
+
+
 @asynccontextmanager
 async def temp_directory():
     """Context manager for temporary directory cleanup."""
@@ -148,8 +186,7 @@ async def download_youtube_video(url: str, quality: str = 'best') -> Tuple[str, 
             await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
         
         # Find the downloaded file
-        ext = info.get('ext', 'mp4')
-        file_path = f"{temp_dir}/{video_id}.{ext}"
+        file_path = _find_downloaded_file(temp_dir)
         
         metadata = {
             'title': info.get('title', 'Unknown'),
@@ -195,7 +232,8 @@ async def download_youtube_audio(url: str, quality: str = 'high') -> Tuple[str, 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
         
-        file_path = f"{temp_dir}/{video_id}.{AUDIO_FORMAT}"
+        # Find the downloaded audio file
+        file_path = _find_downloaded_file(temp_dir, AUDIO_FORMAT)
         
         metadata = {
             'title': title,
@@ -226,9 +264,8 @@ async def download_tiktok_video(url: str) -> Tuple[str, dict]:
             info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
             await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
         
-        video_id = info.get('id', 'video')
-        ext = info.get('ext', 'mp4')
-        file_path = f"{temp_dir}/{video_id}.{ext}"
+        # Find the downloaded file
+        file_path = _find_downloaded_file(temp_dir)
         
         metadata = {
             'duration': int(info.get('duration', 0)),

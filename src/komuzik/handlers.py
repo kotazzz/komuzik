@@ -49,6 +49,85 @@ class BotHandlers:
         username = event.sender.username if event.sender else None
         self.stats.track_user(user_id, username)
     
+    def _get_user_info(self, event: Message) -> tuple[int, str | None]:
+        """Extract user ID and username from event."""
+        user_id = event.sender_id
+        username = event.sender.username if event.sender else None
+        return user_id, username
+    
+    async def _check_download_limit(self, event: Message, user_id: int, download_id: str) -> bool:
+        """Check if user can start a new download.
+        
+        Returns:
+            True if download can proceed, False if limit reached
+        """
+        if not self.download_limiter.start_download(user_id, download_id):
+            active_count = self.download_limiter.get_active_count(user_id)
+            await event.respond(
+                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
+                f"Пожалуйста, дождитесь завершения текущей загрузки."
+            )
+            return False
+        return True
+    
+    async def _download_and_send_content(
+        self, 
+        event: Message, 
+        url: str, 
+        quality: str,
+        content_type: str,
+        download_func: Callable,
+        send_func: Callable,
+        track_func: Callable,
+        action: str
+    ):
+        """Generic function to download and send content (video/audio).
+        
+        Args:
+            event: Telegram event
+            url: Content URL
+            quality: Quality setting
+            content_type: 'video' or 'audio' for logging
+            download_func: Function to download content
+            send_func: Function to send content
+            track_func: Function to track download stats
+            action: Telegram action type ('video' or 'audio')
+        """
+        user_id, username = self._get_user_info(event)
+        download_id = str(uuid.uuid4())
+        
+        # Check download limit
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
+        
+        try:
+            async with event.client.action(event.chat_id, action):
+                try:
+                    processing_msg = await event.respond(f"Загрузка {content_type}... Пожалуйста, подождите.")
+                    logger.info(f"Downloading {content_type}: {url} with quality: {quality}")
+                    
+                    file_path, metadata = await download_func(url, quality)
+                    logger.info(f"{content_type.capitalize()} downloaded successfully: {file_path}")
+                    
+                    await send_func(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    # Track successful download
+                    track_func(user_id, quality, username, success=True)
+                    
+                    # Cleanup
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending {content_type}: {e}")
+                    # Track failed download
+                    track_func(user_id, quality, username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке {content_type}: {str(e)}")
+        finally:
+            # Always release the download slot
+            self.download_limiter.finish_download(user_id, download_id)
+    
     async def start_handler(self, event: Message):
         """Handle /start command."""
         self._track_user(event)
@@ -135,19 +214,11 @@ class BotHandlers:
     
     async def _handle_tiktok(self, event: Message, url: str):
         """Handle TikTok video download."""
-        user_id = event.sender_id
-        username = event.sender.username if event.sender else None
-        
-        # Generate unique download ID
+        user_id, username = self._get_user_info(event)
         download_id = str(uuid.uuid4())
         
         # Check download limit
-        if not self.download_limiter.start_download(user_id, download_id):
-            active_count = self.download_limiter.get_active_count(user_id)
-            await event.respond(
-                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
-                f"Пожалуйста, дождитесь завершения текущей загрузки."
-            )
+        if not await self._check_download_limit(event, user_id, download_id):
             return
         
         try:
@@ -304,93 +375,32 @@ class BotHandlers:
     
     async def _download_and_send_video(self, event, url: str, quality: str):
         """Download and send YouTube video."""
-        user_id = event.sender_id
-        username = event.sender.username if event.sender else None
+        def track_video(user_id, quality, username, success, error_message=None):
+            self.stats.track_video_download(user_id, quality, 'youtube', username, success=success, error_message=error_message)
         
-        # Generate unique download ID
-        download_id = str(uuid.uuid4())
-        
-        # Check download limit
-        if not self.download_limiter.start_download(user_id, download_id):
-            active_count = self.download_limiter.get_active_count(user_id)
-            await event.respond(
-                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
-                f"Пожалуйста, дождитесь завершения текущей загрузки."
-            )
-            return
-        
-        try:
-            async with event.client.action(event.chat_id, 'video'):
-                try:
-                    processing_msg = await event.respond("Загрузка видео... Пожалуйста, подождите.")
-                    logger.info(f"Downloading video: {url} with quality: {quality}")
-                    
-                    file_path, metadata = await download_youtube_video(url, quality)
-                    logger.info(f"Video downloaded successfully: {file_path}")
-                    
-                    await send_video_content(event, file_path, metadata, self.bot_username)
-                    await processing_msg.delete()
-                    
-                    # Track successful video download
-                    self.stats.track_video_download(user_id, quality, 'youtube', username, success=True)
-                    
-                    # Cleanup
-                    if os.path.exists(os.path.dirname(file_path)):
-                        shutil.rmtree(os.path.dirname(file_path))
-                        
-                except Exception as e:
-                    logger.error(f"Error sending video: {e}")
-                    # Track failed video download
-                    self.stats.track_video_download(user_id, quality, 'youtube', username, success=False, error_message=str(e))
-                    await event.respond(f"Произошла ошибка при обработке видео: {str(e)}")
-        finally:
-            # Always release the download slot
-            self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event=event,
+            url=url,
+            quality=quality,
+            content_type="видео",
+            download_func=download_youtube_video,
+            send_func=send_video_content,
+            track_func=track_video,
+            action='video'
+        )
     
     async def _download_and_send_audio(self, event, url: str, quality: str):
         """Download and send YouTube audio."""
-        user_id = event.sender_id
-        username = event.sender.username if event.sender else None
-        
-        # Generate unique download ID
-        download_id = str(uuid.uuid4())
-        
-        # Check download limit
-        if not self.download_limiter.start_download(user_id, download_id):
-            active_count = self.download_limiter.get_active_count(user_id)
-            await event.respond(
-                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
-                f"Пожалуйста, дождитесь завершения текущей загрузки."
-            )
-            return
-        
-        try:
-            async with event.client.action(event.chat_id, 'audio'):
-                try:
-                    processing_msg = await event.respond("Загрузка аудио... Пожалуйста, подождите.")
-                    logger.info(f"Downloading audio: {url} with quality: {quality}")
-                    
-                    file_path, metadata = await download_youtube_audio(url, quality)
-                    logger.info(f"Audio downloaded successfully: {file_path}")
-                    
-                    await send_audio_content(event, file_path, metadata, self.bot_username)
-                    await processing_msg.delete()
-                    
-                    # Track successful audio download
-                    self.stats.track_audio_download(user_id, quality, username, success=True)
-                    
-                    # Cleanup
-                    if os.path.exists(os.path.dirname(file_path)):
-                        shutil.rmtree(os.path.dirname(file_path))
-                        
-                except Exception as e:
-                    logger.error(f"Error sending audio: {e}")
-                    # Track failed audio download
-                    self.stats.track_audio_download(user_id, quality, username, success=False, error_message=str(e))
-                    await event.respond(f"Произошла ошибка при обработке аудио: {str(e)}")
-        finally:
-            # Always release the download slot
-            self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event=event,
+            url=url,
+            quality=quality,
+            content_type="аудио",
+            download_func=download_youtube_audio,
+            send_func=send_audio_content,
+            track_func=self.stats.track_audio_download,
+            action='audio'
+        )
     
     async def _handle_stats_callback(self, event, data: str):
         """Handle statistics view callback."""
