@@ -3,6 +3,7 @@ import re
 import logging
 import shutil
 import os
+import uuid
 from typing import Callable, Dict
 from telethon import events, Button
 from telethon.tl.custom import Message
@@ -18,6 +19,7 @@ from .downloaders import (
     send_audio_content,
 )
 from .repository import StatsRepository
+from .download_limiter import DownloadLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class BotHandlers:
         self.client = client
         self.bot_username = bot_username
         self.stats = stats_repo
+        self.download_limiter = DownloadLimiter()
         self._register_handlers()
     
     def _register_handlers(self):
@@ -135,29 +138,45 @@ class BotHandlers:
         user_id = event.sender_id
         username = event.sender.username if event.sender else None
         
-        async with event.client.action(event.chat_id, 'video'):
-            try:
-                processing_msg = await event.respond("Загрузка TikTok видео... Пожалуйста, подождите.")
-                logger.info(f"Downloading TikTok video: {url}")
-                
-                file_path, metadata = await download_tiktok_video(url)
-                logger.info(f"TikTok video downloaded successfully: {file_path}")
-                
-                await send_video_content(event, file_path, metadata, self.bot_username)
-                await processing_msg.delete()
-                
-                # Track successful TikTok download
-                self.stats.track_tiktok_download(user_id, username, success=True)
-                
-                # Cleanup
-                if os.path.exists(os.path.dirname(file_path)):
-                    shutil.rmtree(os.path.dirname(file_path))
+        # Generate unique download ID
+        download_id = str(uuid.uuid4())
+        
+        # Check download limit
+        if not self.download_limiter.start_download(user_id, download_id):
+            active_count = self.download_limiter.get_active_count(user_id)
+            await event.respond(
+                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
+                f"Пожалуйста, дождитесь завершения текущей загрузки."
+            )
+            return
+        
+        try:
+            async with event.client.action(event.chat_id, 'video'):
+                try:
+                    processing_msg = await event.respond("Загрузка TikTok видео... Пожалуйста, подождите.")
+                    logger.info(f"Downloading TikTok video: {url}")
                     
-            except Exception as e:
-                logger.error(f"Error sending TikTok video: {e}")
-                # Track failed TikTok download
-                self.stats.track_tiktok_download(user_id, username, success=False, error_message=str(e))
-                await event.respond(f"Произошла ошибка при обработке TikTok видео: {str(e)}")
+                    file_path, metadata = await download_tiktok_video(url)
+                    logger.info(f"TikTok video downloaded successfully: {file_path}")
+                    
+                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    # Track successful TikTok download
+                    self.stats.track_tiktok_download(user_id, username, success=True)
+                    
+                    # Cleanup
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending TikTok video: {e}")
+                    # Track failed TikTok download
+                    self.stats.track_tiktok_download(user_id, username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке TikTok видео: {str(e)}")
+        finally:
+            # Always release the download slot
+            self.download_limiter.finish_download(user_id, download_id)
     
     async def _show_content_type_selection(self, event: Message, url: str):
         """Show content type selection buttons for YouTube."""
@@ -288,58 +307,90 @@ class BotHandlers:
         user_id = event.sender_id
         username = event.sender.username if event.sender else None
         
-        async with event.client.action(event.chat_id, 'video'):
-            try:
-                processing_msg = await event.respond("Загрузка видео... Пожалуйста, подождите.")
-                logger.info(f"Downloading video: {url} with quality: {quality}")
-                
-                file_path, metadata = await download_youtube_video(url, quality)
-                logger.info(f"Video downloaded successfully: {file_path}")
-                
-                await send_video_content(event, file_path, metadata, self.bot_username)
-                await processing_msg.delete()
-                
-                # Track successful video download
-                self.stats.track_video_download(user_id, quality, 'youtube', username, success=True)
-                
-                # Cleanup
-                if os.path.exists(os.path.dirname(file_path)):
-                    shutil.rmtree(os.path.dirname(file_path))
+        # Generate unique download ID
+        download_id = str(uuid.uuid4())
+        
+        # Check download limit
+        if not self.download_limiter.start_download(user_id, download_id):
+            active_count = self.download_limiter.get_active_count(user_id)
+            await event.respond(
+                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
+                f"Пожалуйста, дождитесь завершения текущей загрузки."
+            )
+            return
+        
+        try:
+            async with event.client.action(event.chat_id, 'video'):
+                try:
+                    processing_msg = await event.respond("Загрузка видео... Пожалуйста, подождите.")
+                    logger.info(f"Downloading video: {url} with quality: {quality}")
                     
-            except Exception as e:
-                logger.error(f"Error sending video: {e}")
-                # Track failed video download
-                self.stats.track_video_download(user_id, quality, 'youtube', username, success=False, error_message=str(e))
-                await event.respond(f"Произошла ошибка при обработке видео: {str(e)}")
+                    file_path, metadata = await download_youtube_video(url, quality)
+                    logger.info(f"Video downloaded successfully: {file_path}")
+                    
+                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    # Track successful video download
+                    self.stats.track_video_download(user_id, quality, 'youtube', username, success=True)
+                    
+                    # Cleanup
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending video: {e}")
+                    # Track failed video download
+                    self.stats.track_video_download(user_id, quality, 'youtube', username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке видео: {str(e)}")
+        finally:
+            # Always release the download slot
+            self.download_limiter.finish_download(user_id, download_id)
     
     async def _download_and_send_audio(self, event, url: str, quality: str):
         """Download and send YouTube audio."""
         user_id = event.sender_id
         username = event.sender.username if event.sender else None
         
-        async with event.client.action(event.chat_id, 'audio'):
-            try:
-                processing_msg = await event.respond("Загрузка аудио... Пожалуйста, подождите.")
-                logger.info(f"Downloading audio: {url} with quality: {quality}")
-                
-                file_path, metadata = await download_youtube_audio(url, quality)
-                logger.info(f"Audio downloaded successfully: {file_path}")
-                
-                await send_audio_content(event, file_path, metadata, self.bot_username)
-                await processing_msg.delete()
-                
-                # Track successful audio download
-                self.stats.track_audio_download(user_id, quality, username, success=True)
-                
-                # Cleanup
-                if os.path.exists(os.path.dirname(file_path)):
-                    shutil.rmtree(os.path.dirname(file_path))
+        # Generate unique download ID
+        download_id = str(uuid.uuid4())
+        
+        # Check download limit
+        if not self.download_limiter.start_download(user_id, download_id):
+            active_count = self.download_limiter.get_active_count(user_id)
+            await event.respond(
+                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
+                f"Пожалуйста, дождитесь завершения текущей загрузки."
+            )
+            return
+        
+        try:
+            async with event.client.action(event.chat_id, 'audio'):
+                try:
+                    processing_msg = await event.respond("Загрузка аудио... Пожалуйста, подождите.")
+                    logger.info(f"Downloading audio: {url} with quality: {quality}")
                     
-            except Exception as e:
-                logger.error(f"Error sending audio: {e}")
-                # Track failed audio download
-                self.stats.track_audio_download(user_id, quality, username, success=False, error_message=str(e))
-                await event.respond(f"Произошла ошибка при обработке аудио: {str(e)}")
+                    file_path, metadata = await download_youtube_audio(url, quality)
+                    logger.info(f"Audio downloaded successfully: {file_path}")
+                    
+                    await send_audio_content(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    # Track successful audio download
+                    self.stats.track_audio_download(user_id, quality, username, success=True)
+                    
+                    # Cleanup
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending audio: {e}")
+                    # Track failed audio download
+                    self.stats.track_audio_download(user_id, quality, username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке аудио: {str(e)}")
+        finally:
+            # Always release the download slot
+            self.download_limiter.finish_download(user_id, download_id)
     
     async def _handle_stats_callback(self, event, data: str):
         """Handle statistics view callback."""
