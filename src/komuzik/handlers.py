@@ -210,6 +210,14 @@ class BotHandlers:
         if user_id in REPORT_STATES and REPORT_STATES[user_id]:
             report_text = event.message.text
             
+            # Ignore if user sends another command while in report state
+            if report_text.startswith('/'):
+                # Handle /cancel command
+                if report_text.strip() == '/cancel':
+                    del REPORT_STATES[user_id]
+                    await event.respond("❌ Отправка отчета отменена.")
+                return
+            
             # Save report to database
             self.stats.save_user_report(user_id, username, report_text)
             
