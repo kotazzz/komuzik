@@ -6,6 +6,7 @@ import shutil
 import os
 from contextlib import asynccontextmanager
 from typing import Tuple, List
+import time
 import yt_dlp
 from telethon.tl.custom import Message
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
@@ -19,6 +20,9 @@ from .config import (
     DEFAULT_VIDEO_WIDTH,
     DEFAULT_VIDEO_HEIGHT,
     DEFAULT_SEARCH_RESULTS,
+    TIKTOK_MAX_RETRIES,
+    TIKTOK_RETRY_BACKOFF,
+    TIKTOK_ERROR_MESSAGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,35 +253,83 @@ async def download_youtube_audio(url: str, quality: str = 'high') -> Tuple[str, 
         raise
 
 
-async def download_tiktok_video(url: str) -> Tuple[str, dict]:
-    """Download a TikTok video and return the path and metadata."""
-    temp_dir = tempfile.mkdtemp()
+async def download_tiktok_video(url: str, max_retries: int = None) -> Tuple[str, dict]:
+    """Download a TikTok video and return the path and metadata.
     
-    try:
-        ydl_opts = {
-            **YDLP_BASE_OPTS,
-            'format': 'best',
-            'outtmpl': f'{temp_dir}/%(id)s.%(ext)s',
-        }
+    Includes retry logic for transient extraction failures.
+    
+    Args:
+        url: TikTok video URL
+        max_retries: Maximum number of retry attempts (uses config default if None)
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
-            await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
-        
-        # Find the downloaded file
-        file_path = _find_downloaded_file(temp_dir)
-        
-        metadata = {
-            'duration': int(info.get('duration', 0)),
-            'width': info.get('width', 0),
-            'height': info.get('height', 0),
-        }
-        
-        return file_path, metadata
-    except Exception:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        raise
+    Raises:
+        Exception: If download fails after all retries
+    """
+    if max_retries is None:
+        max_retries = TIKTOK_MAX_RETRIES
+    
+    temp_dir = tempfile.mkdtemp()
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            ydl_opts = {
+                **YDLP_BASE_OPTS,
+                'format': 'best',
+                'outtmpl': f'{temp_dir}/%(id)s.%(ext)s',
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
+                await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
+            
+            # Find the downloaded file
+            file_path = _find_downloaded_file(temp_dir)
+            
+            metadata = {
+                'duration': int(info.get('duration', 0)),
+                'width': info.get('width', 0),
+                'height': info.get('height', 0),
+            }
+            
+            return file_path, metadata
+            
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            last_error = e
+            
+            # Check if it's an extraction error (likely temporary)
+            if 'Unable to extract' in error_msg or 'webpage' in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = TIKTOK_RETRY_BACKOFF ** attempt  # Exponential backoff
+                    logger.warning(
+                        f"TikTok extraction failed (attempt {attempt + 1}/{max_retries}). "
+                        f"Retrying in {wait_time}s... Error: {error_msg}"
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(
+                        f"TikTok video extraction failed after {max_retries} attempts. "
+                        f"This may be due to: 1) TikTok API changes, 2) Region restrictions, "
+                        f"3) Video unavailability. URL: {url}"
+                    )
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                    raise Exception(TIKTOK_ERROR_MESSAGE)
+            else:
+                # Not a temporary extraction error, fail immediately
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise Exception(f"TikTok download error: {error_msg}")
+                
+        except Exception as e:
+            last_error = e
+            logger.error(f"Unexpected error downloading TikTok (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise
 
 
 async def send_video_content(event: Message, file_path: str, metadata: dict, bot_username: str = ""):
