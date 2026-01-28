@@ -21,7 +21,7 @@ fi
 echo "✓ Переменные окружения установлены"
 
 # Проверка компонентов
-python << 'PYEOF'
+uv run python << 'PYEOF'
 import sys
 try:
     from komuzik.config import *
@@ -41,4 +41,4 @@ echo "🤖 Запуск бота..."
 echo ""
 
 # Запуск бота
-exec python -m komuzik.main
+exec uv run python -m komuzik.main
