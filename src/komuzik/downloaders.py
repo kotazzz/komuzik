@@ -401,31 +401,41 @@ async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> T
     
     try:
         # Run gallery-dl to download content (supports both photos and videos)
+        # Use --no-mtime to avoid issues, and flat directory structure
         result = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: subprocess.run(
-                ['gallery-dl', '--dest', temp_dir, '--filename', '{tweet_id}_{num}.{extension}', url],
+                ['gallery-dl', '-d', temp_dir, '-o', 'directory=[]', '-o', 'filename={tweet_id}_{num}.{extension}', url],
                 capture_output=True,
                 text=True,
                 timeout=120
             )
         )
         
-        if result.returncode != 0:
+        logger.info(f"gallery-dl stdout: {result.stdout}")
+        logger.info(f"gallery-dl stderr: {result.stderr}")
+        logger.info(f"gallery-dl return code: {result.returncode}")
+        
+        # Find downloaded files recursively (gallery-dl may create subdirectories)
+        all_files = []
+        for root, dirs, files in os.walk(temp_dir):
+            for f in files:
+                all_files.append(os.path.join(root, f))
+        
+        logger.info(f"Files found in temp_dir: {all_files}")
+        
+        if result.returncode != 0 and not all_files:
             logger.error(f"gallery-dl failed: {result.stderr}")
             raise Exception(f"gallery-dl error: {result.stderr}")
         
-        # Find downloaded files - check for both images and videos
-        files = os.listdir(temp_dir)
-        
         # Video extensions
-        video_files = [f for f in files if f.endswith(('.mp4', '.webm', '.mov', '.avi', '.mkv'))]
+        video_files = [f for f in all_files if f.endswith(('.mp4', '.webm', '.mov', '.avi', '.mkv'))]
         # Image extensions  
-        image_files = [f for f in files if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))]
+        image_files = [f for f in all_files if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))]
         
         # Prefer video files if available
         if video_files:
-            file_path = os.path.join(temp_dir, video_files[0])
+            file_path = video_files[0]
             content_type = 'video'
             # Try to get video duration using ffprobe if available
             duration = 0
@@ -452,7 +462,7 @@ async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> T
                 'content_type': content_type,
             }
         elif image_files:
-            file_path = os.path.join(temp_dir, image_files[0])
+            file_path = image_files[0]
             content_type = 'photo'
             metadata = {
                 'duration': 0,
