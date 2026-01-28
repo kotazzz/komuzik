@@ -19,6 +19,7 @@ from .downloaders import (
     download_twitter_video,
     send_video_content,
     send_audio_content,
+    send_image_content,
 )
 from .repository import StatsRepository
 from .download_limiter import DownloadLimiter
@@ -523,7 +524,7 @@ class BotHandlers:
             await event.edit(f"Произошла ошибка при получении статистики: {str(e)}")
     
     async def _handle_twitter(self, event: Message, url: str):
-        """Handle Twitter/X video download."""
+        """Handle Twitter/X video and photo download."""
         user_id, username = self._get_user_info(event)
         download_id = str(uuid.uuid4())
         
@@ -533,13 +534,18 @@ class BotHandlers:
         try:
             async with event.client.action(event.chat_id, 'video'):
                 try:
-                    processing_msg = await event.respond("Загрузка видео с Twitter... Пожалуйста, подождите.")
-                    logger.info(f"Downloading Twitter video: {url}")
+                    processing_msg = await event.respond("Загрузка с Twitter... Пожалуйста, подождите.")
+                    logger.info(f"Downloading Twitter content: {url}")
                     
                     file_path, metadata = await download_twitter_video(url)
-                    logger.info(f"Twitter video downloaded successfully: {file_path}")
+                    logger.info(f"Twitter content downloaded successfully: {file_path}")
                     
-                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    # Send appropriate content type
+                    if metadata.get('content_type') == 'photo':
+                        await send_image_content(event, file_path, self.bot_username)
+                    else:
+                        await send_video_content(event, file_path, metadata, self.bot_username)
+                    
                     await processing_msg.delete()
                     
                     self.stats.track_tiktok_download(user_id, username, success=True)
@@ -548,9 +554,9 @@ class BotHandlers:
                         shutil.rmtree(os.path.dirname(file_path))
                         
                 except Exception as e:
-                    logger.error(f"Error sending Twitter video: {e}")
+                    logger.error(f"Error sending Twitter content: {e}")
                     self.stats.track_tiktok_download(user_id, username, success=False, error_message=str(e))
-                    await event.respond(f"Произошла ошибка при обработке видео: {str(e)}")
+                    await event.respond(f"Произошла ошибка при обработке контента: {str(e)}")
         finally:
             self.download_limiter.finish_download(user_id, download_id)
     

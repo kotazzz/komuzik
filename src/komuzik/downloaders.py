@@ -31,12 +31,13 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 
-def _find_downloaded_file(temp_dir: str, expected_extension: str = None) -> str:
+def _find_downloaded_file(temp_dir: str, expected_extension: str = None, allow_images: bool = False) -> str:
     """Find and verify downloaded file in temp directory.
     
     Args:
         temp_dir: Directory to search in
         expected_extension: Optional expected file extension (e.g., 'mp3')
+        allow_images: If True, also include image files (for Twitter photos)
         
     Returns:
         Full path to the downloaded file
@@ -48,8 +49,11 @@ def _find_downloaded_file(temp_dir: str, expected_extension: str = None) -> str:
     if not files:
         raise Exception("No files downloaded")
     
-    # Filter out thumbnails
-    media_files = [f for f in files if not f.endswith(('.jpg', '.png', '.webp'))]
+    # Filter out thumbnails unless allow_images is True
+    if allow_images:
+        media_files = [f for f in files]
+    else:
+        media_files = [f for f in files if not f.endswith(('.jpg', '.png', '.webp'))]
     
     # If expected extension specified, try to find file with that extension first
     if expected_extension:
@@ -370,14 +374,28 @@ async def send_audio_content(event: Message, file_path: str, metadata: dict, bot
         attributes=[audio_attr]
     )
 
+
+async def send_image_content(event: Message, file_path: str, bot_username: str = ""):
+    """Send image file to Telegram."""
+    caption = f"@{bot_username}" if bot_username else ""
+    
+    await event.respond(
+        caption,
+        file=file_path
+    )
+
 async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str, dict]:
-    """Download a Twitter/X video and return the path and metadata.
+    """Download a Twitter/X video or photo and return the path and metadata.
     
     Includes retry logic for transient extraction failures.
+    Supports both videos and photos.
     
     Args:
-        url: Twitter/X video URL
+        url: Twitter/X video or photo URL
         max_retries: Maximum number of retry attempts (uses config default if None)
+        
+    Returns:
+        Tuple of (file_path, metadata) where metadata includes 'content_type' ('video' or 'photo')
         
     Raises:
         Exception: If download fails after all retries
@@ -399,12 +417,20 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
                 info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
                 await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
             
-            file_path = _find_downloaded_file(temp_dir)
+            # Try to find video/media files first, then fall back to images
+            try:
+                file_path = _find_downloaded_file(temp_dir, allow_images=False)
+                content_type = 'video'
+            except Exception:
+                # If no video found, try to find image files (for Twitter photos)
+                file_path = _find_downloaded_file(temp_dir, allow_images=True)
+                content_type = 'photo'
             
             metadata = {
                 'duration': int(info.get('duration', 0)),
                 'width': info.get('width', 0),
                 'height': info.get('height', 0),
+                'content_type': content_type,
             }
             
             return file_path, metadata
