@@ -384,11 +384,66 @@ async def send_image_content(event: Message, file_path: str, bot_username: str =
         file=file_path
     )
 
+async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> Tuple[str, dict]:
+    """Download Twitter photos using gallery-dl.
+    
+    Args:
+        url: Twitter/X photo URL
+        temp_dir: Directory to save files to
+        
+    Returns:
+        Tuple of (file_path, metadata)
+        
+    Raises:
+        Exception: If download fails
+    """
+    import subprocess
+    
+    try:
+        # Run gallery-dl to download photos
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ['gallery-dl', '--dest', temp_dir, '--filename', '{tweet_id}_{num}.{extension}', url],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"gallery-dl failed: {result.stderr}")
+            raise Exception(f"gallery-dl error: {result.stderr}")
+        
+        # Find downloaded files
+        files = os.listdir(temp_dir)
+        image_files = [f for f in files if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))]
+        
+        if not image_files:
+            raise Exception("No images downloaded by gallery-dl")
+        
+        file_path = os.path.join(temp_dir, image_files[0])
+        
+        metadata = {
+            'duration': 0,
+            'width': 0,
+            'height': 0,
+            'content_type': 'photo',
+        }
+        
+        return file_path, metadata
+        
+    except FileNotFoundError:
+        raise Exception("gallery-dl not installed")
+    except subprocess.TimeoutExpired:
+        raise Exception("gallery-dl timeout")
+
+
 async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str, dict]:
     """Download a Twitter/X video or photo and return the path and metadata.
     
     Includes retry logic for transient extraction failures.
-    Supports both videos and photos.
+    Supports both videos and photos. For photos, falls back to gallery-dl.
     
     Args:
         url: Twitter/X video or photo URL
@@ -404,6 +459,7 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
         max_retries = TWITTER_MAX_RETRIES
     
     temp_dir = tempfile.mkdtemp()
+    last_error = None
     
     for attempt in range(max_retries):
         try:
@@ -437,6 +493,21 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
             
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
+            last_error = e
+            
+            # Check if this might be a photo-only tweet (no video available)
+            if 'Unsupported URL' in error_msg or 'no video' in error_msg.lower() or 'Unable to extract' in error_msg:
+                # Try gallery-dl for photos
+                logger.info(f"yt-dlp failed, trying gallery-dl for potential photo: {url}")
+                try:
+                    # Clean temp_dir for gallery-dl
+                    for f in os.listdir(temp_dir):
+                        os.remove(os.path.join(temp_dir, f))
+                    
+                    return await _download_twitter_photos_with_gallery_dl(url, temp_dir)
+                except Exception as gallery_error:
+                    logger.warning(f"gallery-dl also failed: {gallery_error}")
+                    # Continue with retry logic
             
             if attempt < max_retries - 1:
                 wait_time = TWITTER_RETRY_BACKOFF ** attempt
@@ -449,9 +520,10 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
             else:
                 if os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
-                raise Exception(f"Не удается загрузить видео с Twitter/X. Пожалуйста, проверьте ссылку и попробуйте позже.")
+                raise Exception(TWITTER_ERROR_MESSAGE)
         
         except Exception as e:
+            last_error = e
             logger.error(f"Unexpected error downloading Twitter (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
                 if os.path.exists(temp_dir):

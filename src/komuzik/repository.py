@@ -342,6 +342,21 @@ class StatsRepository:
         results = self.db.fetchall(query, (event_type, limit))
         return [(row[0], row[1]) for row in results] if results else []
     
+    def _get_error_count(self, date_filter: str) -> int:
+        """Get count of error events.
+        
+        Args:
+            date_filter: SQL date filter clause
+            
+        Returns:
+            Number of error events
+        """
+        query = f'''SELECT COUNT(*) FROM statistics 
+                    WHERE event_type LIKE 'error_%'
+                    {date_filter}'''
+        result = self.db.fetchone(query)
+        return result[0] if result else 0
+    
     def get_all_users(self) -> list:
         """Get all tracked users.
         
