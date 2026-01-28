@@ -190,14 +190,21 @@ async def download_youtube_video(url: str, quality: str = 'best') -> Tuple[str, 
             **YDLP_BASE_OPTS,
             'format': format_option,
             'outtmpl': f'{temp_dir}/{video_id}.%(ext)s',
-            'postprocessors': [{'key': 'FFmpegMetadata', 'add_metadata': True}],
+            'postprocessors': [
+                {
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                },
+                {'key': 'FFmpegMetadata', 'add_metadata': True},
+            ],
+            'merge_output_format': 'mp4',
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
         
         # Find the downloaded file
-        file_path = _find_downloaded_file(temp_dir)
+        file_path = _find_downloaded_file(temp_dir, expected_extension='mp4')
         
         metadata = {
             'title': info.get('title', 'Unknown'),
