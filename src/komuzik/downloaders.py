@@ -385,29 +385,29 @@ async def send_image_content(event: Message, file_path: str, bot_username: str =
     )
 
 async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> Tuple[str, dict]:
-    """Download Twitter photos using gallery-dl.
+    """Download Twitter content (photos or videos) using gallery-dl.
     
     Args:
-        url: Twitter/X photo URL
+        url: Twitter/X URL
         temp_dir: Directory to save files to
         
     Returns:
         Tuple of (file_path, metadata)
         
     Raises:
-        Exception: If download fails
+        Exception: If download fails or no media found
     """
     import subprocess
     
     try:
-        # Run gallery-dl to download photos
+        # Run gallery-dl to download content (supports both photos and videos)
         result = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: subprocess.run(
                 ['gallery-dl', '--dest', temp_dir, '--filename', '{tweet_id}_{num}.{extension}', url],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=120
             )
         )
         
@@ -415,21 +415,53 @@ async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> T
             logger.error(f"gallery-dl failed: {result.stderr}")
             raise Exception(f"gallery-dl error: {result.stderr}")
         
-        # Find downloaded files
+        # Find downloaded files - check for both images and videos
         files = os.listdir(temp_dir)
+        
+        # Video extensions
+        video_files = [f for f in files if f.endswith(('.mp4', '.webm', '.mov', '.avi', '.mkv'))]
+        # Image extensions  
         image_files = [f for f in files if f.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))]
         
-        if not image_files:
-            raise Exception("No images downloaded by gallery-dl")
-        
-        file_path = os.path.join(temp_dir, image_files[0])
-        
-        metadata = {
-            'duration': 0,
-            'width': 0,
-            'height': 0,
-            'content_type': 'photo',
-        }
+        # Prefer video files if available
+        if video_files:
+            file_path = os.path.join(temp_dir, video_files[0])
+            content_type = 'video'
+            # Try to get video duration using ffprobe if available
+            duration = 0
+            try:
+                probe_result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
+                         '-of', 'default=noprint_wrappers=1:nokey=1', file_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                )
+                if probe_result.returncode == 0 and probe_result.stdout.strip():
+                    duration = int(float(probe_result.stdout.strip()))
+            except Exception:
+                pass
+            
+            metadata = {
+                'duration': duration,
+                'width': 0,
+                'height': 0,
+                'content_type': content_type,
+            }
+        elif image_files:
+            file_path = os.path.join(temp_dir, image_files[0])
+            content_type = 'photo'
+            metadata = {
+                'duration': 0,
+                'width': 0,
+                'height': 0,
+                'content_type': content_type,
+            }
+        else:
+            raise Exception("No media files downloaded by gallery-dl")
         
         return file_path, metadata
         
@@ -442,8 +474,7 @@ async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> T
 async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str, dict]:
     """Download a Twitter/X video or photo and return the path and metadata.
     
-    Includes retry logic for transient extraction failures.
-    Supports both videos and photos. For photos, falls back to gallery-dl.
+    Strategy: Try gallery-dl first (works best for photos), then fall back to yt-dlp for videos.
     
     Args:
         url: Twitter/X video or photo URL
@@ -459,6 +490,23 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
         max_retries = TWITTER_MAX_RETRIES
     
     temp_dir = tempfile.mkdtemp()
+    
+    # First, try gallery-dl (works best for photos and also supports videos)
+    try:
+        logger.info(f"Trying gallery-dl first for Twitter content: {url}")
+        file_path, metadata = await _download_twitter_photos_with_gallery_dl(url, temp_dir)
+        logger.info(f"gallery-dl successfully downloaded: {file_path}")
+        return file_path, metadata
+    except Exception as gallery_error:
+        logger.info(f"gallery-dl did not find content or failed: {gallery_error}, trying yt-dlp for video")
+        # Clean temp_dir for yt-dlp
+        for f in os.listdir(temp_dir):
+            try:
+                os.remove(os.path.join(temp_dir, f))
+            except Exception:
+                pass
+    
+    # Fall back to yt-dlp for videos
     last_error = None
     
     for attempt in range(max_retries):
@@ -494,20 +542,6 @@ async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
             last_error = e
-            
-            # Check if this might be a photo-only tweet (no video available)
-            if 'Unsupported URL' in error_msg or 'no video' in error_msg.lower() or 'Unable to extract' in error_msg:
-                # Try gallery-dl for photos
-                logger.info(f"yt-dlp failed, trying gallery-dl for potential photo: {url}")
-                try:
-                    # Clean temp_dir for gallery-dl
-                    for f in os.listdir(temp_dir):
-                        os.remove(os.path.join(temp_dir, f))
-                    
-                    return await _download_twitter_photos_with_gallery_dl(url, temp_dir)
-                except Exception as gallery_error:
-                    logger.warning(f"gallery-dl also failed: {gallery_error}")
-                    # Continue with retry logic
             
             if attempt < max_retries - 1:
                 wait_time = TWITTER_RETRY_BACKOFF ** attempt
