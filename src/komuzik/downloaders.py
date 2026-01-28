@@ -23,6 +23,9 @@ from .config import (
     TIKTOK_MAX_RETRIES,
     TIKTOK_RETRY_BACKOFF,
     TIKTOK_ERROR_MESSAGE,
+    TWITTER_MAX_RETRIES,
+    TWITTER_RETRY_BACKOFF,
+    TWITTER_ERROR_MESSAGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -366,3 +369,65 @@ async def send_audio_content(event: Message, file_path: str, metadata: dict, bot
         file=file_path,
         attributes=[audio_attr]
     )
+
+async def download_twitter_video(url: str, max_retries: int = None) -> Tuple[str, dict]:
+    """Download a Twitter/X video and return the path and metadata.
+    
+    Includes retry logic for transient extraction failures.
+    
+    Args:
+        url: Twitter/X video URL
+        max_retries: Maximum number of retry attempts (uses config default if None)
+        
+    Raises:
+        Exception: If download fails after all retries
+    """
+    if max_retries is None:
+        max_retries = TWITTER_MAX_RETRIES
+    
+    temp_dir = tempfile.mkdtemp()
+    
+    for attempt in range(max_retries):
+        try:
+            ydl_opts = {
+                **YDLP_BASE_OPTS,
+                'format': 'best',
+                'outtmpl': f'{temp_dir}/%(id)s.%(ext)s',
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await asyncio.get_event_loop().run_in_executor(None, ydl.extract_info, url, False)
+                await asyncio.get_event_loop().run_in_executor(None, ydl.download, [url])
+            
+            file_path = _find_downloaded_file(temp_dir)
+            
+            metadata = {
+                'duration': int(info.get('duration', 0)),
+                'width': info.get('width', 0),
+                'height': info.get('height', 0),
+            }
+            
+            return file_path, metadata
+            
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            
+            if attempt < max_retries - 1:
+                wait_time = TWITTER_RETRY_BACKOFF ** attempt
+                logger.warning(
+                    f"Twitter extraction failed (attempt {attempt + 1}/{max_retries}). "
+                    f"Retrying in {wait_time}s... Error: {error_msg}"
+                )
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise Exception(f"Не удается загрузить видео с Twitter/X. Пожалуйста, проверьте ссылку и попробуйте позже.")
+        
+        except Exception as e:
+            logger.error(f"Unexpected error downloading Twitter (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise

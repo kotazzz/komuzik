@@ -22,6 +22,7 @@ class DownloadLimiter:
         # Load settings from config
         self.MAX_DOWNLOADS_PER_USER = self.download_config.get('max_concurrent_per_user', 1)
         self.UNLIMITED_USER_IDS = set(self.download_config.get('unlimited_user_ids', []))
+        self.ADMIN_USER_IDS = set(self.download_config.get('admin_user_ids', []))
         self.DOWNLOAD_TIMEOUT = self.download_config.get('download_timeout_seconds', 3600)
         self.CLEANUP_INTERVAL = self.download_config.get('cleanup_interval_seconds', 300)
         
@@ -83,8 +84,8 @@ class DownloadLimiter:
         Returns:
             True if user can download, False otherwise
         """
-        # Unlimited users can always download
-        if user_id in self.UNLIMITED_USER_IDS:
+        # Unlimited users (admins and unlimited_user_ids) can always download
+        if user_id in self.UNLIMITED_USER_IDS or user_id in self.ADMIN_USER_IDS:
             return True
         
         # Check if user has reached the limit
@@ -153,4 +154,15 @@ class DownloadLimiter:
         Returns:
             True if user has unlimited downloads
         """
-        return user_id in self.UNLIMITED_USER_IDS
+        return user_id in self.UNLIMITED_USER_IDS or user_id in self.ADMIN_USER_IDS
+    
+    def is_admin(self, user_id: int) -> bool:
+        """Check if user is an admin.
+        
+        Args:
+            user_id: Telegram user ID
+            
+        Returns:
+            True if user is admin
+        """
+        return user_id in self.ADMIN_USER_IDS

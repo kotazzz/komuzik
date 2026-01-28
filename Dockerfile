@@ -22,13 +22,18 @@ RUN uv sync --frozen --no-dev
 
 # Copy application code
 COPY src/ ./src/
+COPY config.yaml .
+
+# Copy entrypoint script
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
 # Create session directory
 RUN mkdir -p /app/session
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app
 
-# Run the bot
-CMD ["uv", "run", "python", "-m", "komuzik.main"]
+# Run entrypoint script
+ENTRYPOINT ["./entrypoint.sh"]

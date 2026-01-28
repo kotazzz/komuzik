@@ -342,15 +342,49 @@ class StatsRepository:
         results = self.db.fetchall(query, (event_type, limit))
         return [(row[0], row[1]) for row in results] if results else []
     
-    def _get_error_count(self, date_filter: str) -> int:
-        """Get total number of errors.
+    def get_all_users(self) -> list:
+        """Get all tracked users.
+        
+        Returns:
+            List of tuples (user_id, username)
+        """
+        try:
+            results = self.db.fetchall("SELECT user_id, username FROM users")
+            return [(row[0], row[1]) for row in results] if results else []
+        except Exception as e:
+            logger.error(f"Failed to get all users: {e}")
+            return []
+    
+    # === Report tracking ===
+    
+    def save_user_report(self, user_id: int, username: Optional[str], report_text: str):
+        """Save user report to database.
         
         Args:
-            date_filter: SQL date filter clause
-            
-        Returns:
-            Number of errors
+            user_id: Telegram user ID
+            username: Telegram username
+            report_text: Report text
         """
-        query = f"SELECT COUNT(*) FROM statistics WHERE success = 0 {date_filter}"
-        result = self.db.fetchone(query)
-        return result[0] if result else 0
+        try:
+            self.db.execute(
+                "INSERT INTO reports (user_id, username, report_text) VALUES (?, ?, ?)",
+                (user_id, username, report_text)
+            )
+            logger.info(f"Saved report from user {user_id}: {report_text[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to save report from {user_id}: {e}")
+    
+    def get_all_reports(self) -> list:
+        """Get all reports from users.
+        
+        Returns:
+            List of (user_id, username, report_text, timestamp) tuples
+        """
+        try:
+            results = self.db.fetchall(
+                "SELECT user_id, username, report_text, created_at FROM reports ORDER BY created_at DESC"
+            )
+            return results if results else []
+        except Exception as e:
+            logger.error(f"Failed to get reports: {e}")
+            return []

@@ -64,6 +64,17 @@ class Database:
             )
         ''')
         
+        # Reports table (to store user reports about problems)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                report_text TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Create indexes for better query performance
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_statistics_event_type 

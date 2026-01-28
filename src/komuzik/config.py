@@ -18,10 +18,13 @@ SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 # URL regex patterns
 YOUTUBE_REGEX = re.compile(
-    r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
+    r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|shorts/|.+\?v=)?([^&=%\?]{11})'
 )
 TIKTOK_REGEX = re.compile(
     r'(https?://)?(www\.|vm\.|vt\.)?(tiktok\.com)/(\S+)'
+)
+TWITTER_REGEX = re.compile(
+    r'(https?://)?(www\.|mobile\.)?(twitter\.com|x\.com)/(\S+)'
 )
 
 # ============= Video Settings =============
@@ -31,6 +34,13 @@ DEFAULT_VIDEO_WIDTH = VIDEO_SETTINGS.get('default_youtube_width', 1280)
 DEFAULT_VIDEO_HEIGHT = VIDEO_SETTINGS.get('default_youtube_height', 720)
 DEFAULT_TIKTOK_WIDTH = VIDEO_SETTINGS.get('default_tiktok_width', 720)
 DEFAULT_TIKTOK_HEIGHT = VIDEO_SETTINGS.get('default_tiktok_height', 1280)
+
+# ============= Download Settings =============
+DOWNLOAD_SETTINGS = _config.get_section('downloads')
+
+MAX_DOWNLOADS_PER_USER = DOWNLOAD_SETTINGS.get('max_concurrent_per_user', 3)
+ADMIN_USER_IDS = set(DOWNLOAD_SETTINGS.get('admin_user_ids', []))
+UNLIMITED_USER_IDS = set(DOWNLOAD_SETTINGS.get('unlimited_user_ids', []))
 
 # ============= Audio Settings =============
 AUDIO_SETTINGS = _config.get_section('audio')
@@ -68,6 +78,16 @@ TIKTOK_ERROR_MESSAGE = TIKTOK_SETTINGS.get(
     'Не удается загрузить видео с TikTok. Пожалуйста, проверьте ссылку и попробуйте позже.'
 )
 
+# ============= Twitter/X Settings =============
+TWITTER_SETTINGS = _config.get_section('twitter')
+
+TWITTER_MAX_RETRIES = TWITTER_SETTINGS.get('max_retries', 3)
+TWITTER_RETRY_BACKOFF = TWITTER_SETTINGS.get('retry_backoff_base', 2)
+TWITTER_ERROR_MESSAGE = TWITTER_SETTINGS.get(
+    'error_message',
+    'Не удается загрузить видео с Twitter/X. Пожалуйста, проверьте ссылку и попробуйте позже.'
+)
+
 # ============= Bot Messages =============
 MESSAGES = _config.get_section('messages')
 
@@ -80,10 +100,14 @@ MSG_START = MESSAGES.get('start',
 
 MSG_HELP = MESSAGES.get('help',
     "🔍 **Как пользоваться ботом:**\n\n"
-    "1. Отправьте мне ссылку на видео YouTube или TikTok\n"
-    "2. Используйте /search для поиска видео на YouTube\n"
-    "3. Для YouTube: выберите тип контента (видео или аудио) и качество\n"
-    "4. Для TikTok: видео скачается автоматически\n"
-    "5. Дождитесь загрузки и получите файл"
+    "1. Отправьте ссылку на видео с YouTube, YouTube Shorts, TikTok или Twitter/X\n"
+    "2. /search <запрос> - поиск видео на YouTube\n"
+    "3. /report - отправить报告 о проблеме\n"
+    "4. /stats - статистика бота\n\n"
+    "📌 **Поддерживаемые платформы:**\n"
+    "• YouTube (видео и аудио, выбор качества)\n"
+    "• YouTube Shorts (видео)\n"
+    "• TikTok (видео)\n"
+    "• Twitter/X (видео, фото, альбомы)"
 )
 

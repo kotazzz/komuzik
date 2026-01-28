@@ -7,14 +7,16 @@ import uuid
 from typing import Callable, Dict
 from telethon import events, Button
 from telethon.tl.custom import Message
+from telethon.tl.types import TypeUpdate
 
-from .config import YOUTUBE_REGEX, TIKTOK_REGEX, MSG_START, MSG_HELP
+from .config import YOUTUBE_REGEX, TIKTOK_REGEX, TWITTER_REGEX, MSG_START, MSG_HELP
 from .downloaders import (
     get_available_formats,
     search_youtube,
     download_youtube_video,
     download_youtube_audio,
     download_tiktok_video,
+    download_twitter_video,
     send_video_content,
     send_audio_content,
 )
@@ -22,6 +24,9 @@ from .repository import StatsRepository
 from .download_limiter import DownloadLimiter
 
 logger = logging.getLogger(__name__)
+
+# States for /report command state machine
+REPORT_STATES = {}
 
 
 class BotHandlers:
@@ -39,6 +44,8 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern='/start'))(self.start_handler)
         self.client.on(events.NewMessage(pattern='/help'))(self.help_handler)
         self.client.on(events.NewMessage(pattern='/stats'))(self.stats_handler)
+        self.client.on(events.NewMessage(pattern='/post'))(self.post_handler)
+        self.client.on(events.NewMessage(pattern='/report'))(self.report_handler)
         self.client.on(events.NewMessage(pattern=r'^/search(?:\s+(.+))?'))(self.search_handler)
         self.client.on(events.NewMessage())(self.message_handler)
         self.client.on(events.CallbackQuery())(self.callback_handler)
@@ -192,11 +199,45 @@ class BotHandlers:
         await searching_msg.edit("Выберите видео из результатов поиска:", buttons=buttons)
     
     async def message_handler(self, event: Message):
-        """Handle incoming messages with YouTube and TikTok links."""
+        """Handle incoming messages with YouTube, TikTok and Twitter links."""
+        if event.message.text is None:
+            return
+        
+        user_id, username = self._get_user_info(event)
+        
+        # Check if user is in report state
+        if user_id in REPORT_STATES and REPORT_STATES[user_id]:
+            report_text = event.message.text
+            
+            # Save report to database
+            self.stats.save_user_report(user_id, username, report_text)
+            
+            # Send report to admins
+            report_msg = f"📋 **Новый отчет**\n\nОт: @{username or user_id}\nID: {user_id}\n\nТекст:\n{report_text}"
+            
+            for admin_id in self.download_limiter.ADMIN_USER_IDS:
+                try:
+                    await self.client.send_message(admin_id, report_msg)
+                except Exception as e:
+                    logger.error(f"Failed to send report to admin {admin_id}: {e}")
+            
+            # Confirm to user
+            await event.respond("✅ Спасибо! Ваш отчет отправлен администраторам.")
+            
+            # Clear state
+            del REPORT_STATES[user_id]
+            return
+        
         if event.message.text.startswith('/'):
             return
         
         self._track_user(event)
+        
+        # Check for Twitter/X
+        twitter_match = TWITTER_REGEX.search(event.message.text)
+        if twitter_match:
+            await self._handle_twitter(event, twitter_match.group(0))
+            return
         
         # Check for TikTok
         tiktok_match = TIKTOK_REGEX.search(event.message.text)
@@ -204,13 +245,17 @@ class BotHandlers:
             await self._handle_tiktok(event, tiktok_match.group(0))
             return
         
-        # Check for YouTube
+        # Check for YouTube (including Shorts)
         youtube_match = YOUTUBE_REGEX.search(event.message.text)
         if not youtube_match:
-            await event.respond("Пожалуйста, отправьте корректную ссылку на видео YouTube или TikTok.")
+            await event.respond("Пожалуйста, отправьте корректную ссылку на видео YouTube, YouTube Shorts, TikTok или Twitter/X.")
             return
         
-        await self._show_content_type_selection(event, youtube_match.group(0))
+        # Check if it's a YouTube Shorts
+        if '/shorts/' in event.message.text:
+            await self._handle_youtube_shorts(event, youtube_match.group(0))
+        else:
+            await self._show_content_type_selection(event, youtube_match.group(0))
     
     async def _handle_tiktok(self, event: Message, url: str):
         """Handle TikTok video download."""
@@ -259,25 +304,39 @@ class BotHandlers:
         ]
         await event.respond("Выберите тип контента для загрузки:", buttons=buttons)
     
-    async def callback_handler(self, event):
-        """Handle callback queries from inline buttons."""
-        data = event.data.decode('utf-8')
+    async def _handle_youtube_shorts(self, event: Message, url: str):
+        """Handle YouTube Shorts download."""
+        user_id, username = self._get_user_info(event)
+        download_id = str(uuid.uuid4())
         
-        # Route callbacks using dictionary
-        handlers: Dict[str, Callable] = {
-            'select_': self._handle_select_callback,
-            'content_': self._handle_content_callback,
-            'quality_': self._handle_quality_callback,
-            'audio_': self._handle_audio_callback,
-            'stats_': self._handle_stats_callback,
-        }
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
         
-        for prefix, handler in handlers.items():
-            if data.startswith(prefix):
-                await handler(event, data)
-                return
-        
-        logger.warning(f"Unknown callback data: {data}")
+        try:
+            async with event.client.action(event.chat_id, 'video'):
+                try:
+                    processing_msg = await event.respond("Загрузка YouTube Short... Пожалуйста, подождите.")
+                    logger.info(f"Downloading YouTube Short: {url}")
+                    
+                    file_path, metadata = await download_youtube_video(url, quality='best')
+                    logger.info(f"YouTube Short downloaded successfully: {file_path}")
+                    
+                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    self.stats.track_video_download(user_id, 'auto', 'youtube_shorts', username, success=True)
+                    
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending YouTube Short: {e}")
+                    self.stats.track_video_download(user_id, 'auto', 'youtube_shorts', username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке YouTube Short: {str(e)}")
+        finally:
+            self.download_limiter.finish_download(user_id, download_id)
+
+    
     
     async def _handle_select_callback(self, event, data: str):
         """Handle video selection from search results."""
@@ -462,3 +521,116 @@ class BotHandlers:
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")
             await event.edit(f"Произошла ошибка при получении статистики: {str(e)}")
+    
+    async def _handle_twitter(self, event: Message, url: str):
+        """Handle Twitter/X video download."""
+        user_id, username = self._get_user_info(event)
+        download_id = str(uuid.uuid4())
+        
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
+        
+        try:
+            async with event.client.action(event.chat_id, 'video'):
+                try:
+                    processing_msg = await event.respond("Загрузка видео с Twitter... Пожалуйста, подождите.")
+                    logger.info(f"Downloading Twitter video: {url}")
+                    
+                    file_path, metadata = await download_twitter_video(url)
+                    logger.info(f"Twitter video downloaded successfully: {file_path}")
+                    
+                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await processing_msg.delete()
+                    
+                    self.stats.track_tiktok_download(user_id, username, success=True)
+                    
+                    if os.path.exists(os.path.dirname(file_path)):
+                        shutil.rmtree(os.path.dirname(file_path))
+                        
+                except Exception as e:
+                    logger.error(f"Error sending Twitter video: {e}")
+                    self.stats.track_tiktok_download(user_id, username, success=False, error_message=str(e))
+                    await event.respond(f"Произошла ошибка при обработке видео: {str(e)}")
+        finally:
+            self.download_limiter.finish_download(user_id, download_id)
+    
+    async def post_handler(self, event: Message):
+        """Handle /post command for admin broadcast."""
+        user_id, username = self._get_user_info(event)
+        
+        if user_id not in self.download_limiter.ADMIN_USER_IDS:
+            await event.respond("❌ У вас нет доступа к этой команде.")
+            return
+        
+        # Check if it's a reply
+        if not event.message.is_reply:
+            await event.respond("ℹ️ Используйте команду /post в ответе на сообщение, которое нужно переслать всем пользователям.")
+            return
+        
+        try:
+            reply_msg = await event.message.get_reply_message()
+            
+            processing_msg = await event.respond("📢 Отправляю сообщение всем пользователям...")
+            
+            # Get all users from database
+            users = self.stats.get_all_users()
+            sent_count = 0
+            failed_count = 0
+            
+            for user_id_target, _ in users:
+                try:
+                    await self.client.send_message(user_id_target, reply_msg)
+                    sent_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to send message to user {user_id_target}: {e}")
+                    failed_count += 1
+            
+            result = f"✅ Сообщение отправлено {sent_count} пользователям"
+            if failed_count > 0:
+                result += f"\n⚠️ Не удалось отправить {failed_count} пользователям"
+            
+            await processing_msg.edit(result)
+            
+        except Exception as e:
+            logger.error(f"Error in post handler: {e}")
+            await event.respond(f"Произошла ошибка: {str(e)}")
+    
+    async def report_handler(self, event: Message):
+        """Handle /report command for user reports."""
+        user_id, username = self._get_user_info(event)
+        
+        REPORT_STATES[user_id] = True
+        
+        await event.respond(
+            "📝 Опишите проблему (или отправьте /cancel для отмены):",
+            buttons=[[Button.inline("❌ Отмена", data="report_cancel")]]
+        )
+    
+    async def callback_handler(self, event):
+        """Handle callback queries from inline buttons."""
+        data = event.data.decode('utf-8')
+        user_id = event.sender_id
+        
+        # Handle report cancel
+        if data == "report_cancel":
+            if user_id in REPORT_STATES:
+                del REPORT_STATES[user_id]
+            await event.edit("❌ Отправка отчета отменена.")
+            return
+        
+        # Route callbacks using dictionary
+        handlers: Dict[str, Callable] = {
+            'select_': self._handle_select_callback,
+            'content_': self._handle_content_callback,
+            'quality_': self._handle_quality_callback,
+            'audio_': self._handle_audio_callback,
+            'stats_': self._handle_stats_callback,
+        }
+        
+        for prefix, handler in handlers.items():
+            if data.startswith(prefix):
+                await handler(event, data)
+                return
+        
+        logger.warning(f"Unknown callback data: {data}")
+
