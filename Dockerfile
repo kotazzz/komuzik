@@ -1,5 +1,5 @@
-# Use Python 3.11 image as base
-FROM python:3.11-alpine
+# Use Python 3.11 slim image as base
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
@@ -33,7 +33,7 @@ RUN mkdir -p /app/session
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/src
 
 # Run entrypoint script
 ENTRYPOINT ["./entrypoint.sh"]
