@@ -253,15 +253,15 @@ class BotHandlers:
 
     async def message_handler(self, event: Message):
         """Handle incoming messages with YouTube, TikTok and Twitter links."""
-        text = getattr(event.message, "text", None)
-        if not isinstance(text, str):
-            return
-
+        message_obj = event.message
         user_id, username = self._get_user_info(event)
 
         # Check if user is in report state
         if REPORT_STATES.get(user_id):
-            report_text = text
+            raw_report_text = (
+                getattr(message_obj, "text", None) if message_obj is not None else None
+            )
+            report_text = raw_report_text if isinstance(raw_report_text, str) else ""
 
             # Ignore if user sends another command while in report state
             if report_text.startswith("/"):
@@ -272,14 +272,17 @@ class BotHandlers:
                 return
 
             # Save report to database
-            self.stats.save_user_report(user_id, username, report_text)
+            db_text = report_text or "[Медиафайл]"
+            self.stats.save_user_report(user_id, username, db_text)
 
             # Send report to admins
-            report_msg = f"📋 **Новый отчет**\n\nОт: @{username or user_id}\nID: {user_id}\n\nТекст:\n{report_text}"
+            header_msg = f"📋 **Новый отчет**\nОт: @{username or user_id} (ID: {user_id})"
 
             for admin_id in self.download_limiter.ADMIN_USER_IDS:
                 try:
-                    await self.client.send_message(admin_id, report_msg)
+                    await self.client.send_message(admin_id, header_msg)
+                    if message_obj is not None:
+                        await self.client.send_message(admin_id, message_obj)
                 except Exception as e:
                     logger.error(f"Failed to send report to admin {admin_id}: {e}")
 
@@ -288,6 +291,10 @@ class BotHandlers:
 
             # Clear state
             del REPORT_STATES[user_id]
+            return
+
+        text = getattr(message_obj, "text", None) if message_obj is not None else None
+        if not isinstance(text, str) or not text:
             return
 
         if text.startswith("/"):
