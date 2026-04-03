@@ -5,12 +5,15 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 import yt_dlp
 from telethon.tl.custom import Message
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
+from yt_dlp.utils import DownloadError
 
 from .config import (
     AUDIO_BITRATE,
@@ -31,6 +34,16 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Convert arbitrary values to int with a safe fallback."""
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class DownloadTooLargeError(Exception):
@@ -97,15 +110,21 @@ async def get_available_formats(url: str) -> list[int]:
     """Get available video formats for a YouTube URL."""
     try:
         loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(YDLP_BASE_OPTS) as ydl:
-            info = await loop.run_in_executor(None, ydl.extract_info, url, False)
-            formats = info.get("formats", [])
+        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
+            info = cast(
+                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+            )
+            formats = info.get("formats")
+            if not isinstance(formats, list):
+                formats = []
 
             available_heights = set()
             for fmt in formats:
+                if not isinstance(fmt, Mapping):
+                    continue
                 height = fmt.get("height")
                 vcodec = fmt.get("vcodec", "none")
-                if height and vcodec and vcodec != "none":
+                if isinstance(height, int) and vcodec and vcodec != "none":
                     available_heights.add(height)
 
             if not available_heights:
@@ -130,11 +149,19 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
 
         search_query = f"ytsearch{max_results}:{query}"
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_results = await loop.run_in_executor(None, ydl.extract_info, search_query, False)
+        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+            search_results = cast(
+                "dict[str, Any]",
+                await loop.run_in_executor(None, ydl.extract_info, search_query, False),
+            )
+            entries = search_results.get("entries")
+            if not isinstance(entries, list):
+                entries = []
 
             results = []
-            for entry in search_results.get("entries", []):
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
                 results.append(
                     {
                         "id": entry.get("id", ""),
@@ -151,7 +178,7 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
         return []
 
 
-def _extract_metadata(info: dict, title: str) -> tuple[str, str]:
+def _extract_metadata(info: Mapping[str, Any], title: str) -> tuple[str, str]:
     """Extract artist and track name from video info."""
     artist = info.get("artist") or info.get("creator") or info.get("uploader", "Unknown Artist")
     track = info.get("track") or title
@@ -176,7 +203,7 @@ def _build_video_format(quality: str) -> str:
         return "bestvideo+bestaudio/best"
 
 
-def _get_expected_size(info: dict) -> int:
+def _get_expected_size(info: Mapping[str, Any]) -> int:
     """Get an expected file size from yt-dlp metadata if available."""
     for key in ("filesize", "filesize_approx"):
         size = info.get(key)
@@ -199,11 +226,15 @@ def _ensure_file_within_limit(file_path: str, label: str):
     _ensure_size_within_limit(file_size, label)
 
 
-async def _download_content(url: str, temp_dir: str, ydl_opts: dict) -> tuple[str, dict]:
+async def _download_content(
+    url: str, temp_dir: str, ydl_opts: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
     """Download content using yt-dlp and return file path and info."""
     loop = asyncio.get_running_loop()
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+    with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+        info = cast(
+            "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+        )
         await loop.run_in_executor(None, ydl.download, [url])
         return temp_dir, info
 
@@ -216,8 +247,10 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
     try:
         # Get info first
         loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(YDLP_BASE_OPTS) as ydl:
-            info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
+            info = cast(
+                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+            )
 
         _ensure_size_within_limit(_get_expected_size(info), "YouTube video")
 
@@ -238,7 +271,7 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
             "merge_output_format": "mp4",
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
             await loop.run_in_executor(None, ydl.download, [url])
 
         # Find the downloaded file
@@ -268,13 +301,16 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
     try:
         # Get info first
         loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(YDLP_BASE_OPTS) as ydl:
-            info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
+            info = cast(
+                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+            )
 
         _ensure_size_within_limit(_get_expected_size(info), "YouTube audio")
 
         video_id = info.get("id", "")
-        title = info.get("title", "Unknown")
+        title_value = info.get("title")
+        title = title_value if isinstance(title_value, str) else "Unknown"
         artist, track = _extract_metadata(info, title)
 
         format_option = AUDIO_QUALITY_SETTINGS.get(quality, AUDIO_QUALITY_SETTINGS["high"])
@@ -295,7 +331,7 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
             "writethumbnail": True,
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
             await loop.run_in_executor(None, ydl.download, [url])
 
         # Find the downloaded audio file
@@ -330,14 +366,14 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
         Exception: If download fails after all retries
 
     """
-    if max_retries is None:
-        max_retries = TIKTOK_MAX_RETRIES
+    retries = _safe_int(max_retries, _safe_int(TIKTOK_MAX_RETRIES, 3))
+    retries = max(1, retries)
 
     temp_dir = tempfile.mkdtemp()
     last_error = None
     cleanup_on_error = True
 
-    for attempt in range(max_retries):
+    for attempt in range(retries):
         try:
             loop = asyncio.get_running_loop()
             ydl_opts = {
@@ -346,8 +382,10 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+            with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                info = cast(
+                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                )
                 _ensure_size_within_limit(_get_expected_size(info), "TikTok video")
                 await loop.run_in_executor(None, ydl.download, [url])
 
@@ -356,7 +394,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
             _ensure_file_within_limit(file_path, "TikTok video")
 
             metadata = {
-                "duration": int(info.get("duration", 0)),
+                "duration": _safe_int(info.get("duration"), 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
             }
@@ -368,22 +406,22 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
             if cleanup_on_error and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
             raise
-        except yt_dlp.utils.DownloadError as e:
+        except DownloadError as e:
             error_msg = str(e)
             last_error = e
 
             # Check if it's an extraction error (likely temporary)
             if "Unable to extract" in error_msg or "webpage" in error_msg:
-                if attempt < max_retries - 1:
+                if attempt < retries - 1:
                     wait_time = TIKTOK_RETRY_BACKOFF**attempt  # Exponential backoff
                     logger.warning(
-                        f"TikTok extraction failed (attempt {attempt + 1}/{max_retries}). "
+                        f"TikTok extraction failed (attempt {attempt + 1}/{retries}). "
                         f"Retrying in {wait_time}s... Error: {error_msg}"
                     )
                     await asyncio.sleep(wait_time)
                     continue
                 logger.error(
-                    f"TikTok video extraction failed after {max_retries} attempts. "
+                    f"TikTok video extraction failed after {retries} attempts. "
                     f"This may be due to: 1) TikTok API changes, 2) Region restrictions, "
                     f"3) Video unavailability. URL: {url}"
                 )
@@ -402,9 +440,9 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 raise
             last_error = e
             logger.error(
-                f"Unexpected error downloading TikTok (attempt {attempt + 1}/{max_retries}): {e}"
+                f"Unexpected error downloading TikTok (attempt {attempt + 1}/{retries}): {e}"
             )
-            if attempt == max_retries - 1:
+            if attempt == retries - 1:
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
@@ -589,8 +627,8 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
         Exception: If download fails after all retries
 
     """
-    if max_retries is None:
-        max_retries = TWITTER_MAX_RETRIES
+    retries = _safe_int(max_retries, _safe_int(TWITTER_MAX_RETRIES, 3))
+    retries = max(1, retries)
 
     temp_dir = tempfile.mkdtemp()
     cleanup_on_error = True
@@ -625,7 +663,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
     # Fall back to yt-dlp for videos
     last_error = None
 
-    for attempt in range(max_retries):
+    for attempt in range(retries):
         try:
             loop = asyncio.get_running_loop()
             ydl_opts = {
@@ -634,8 +672,10 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+            with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                info = cast(
+                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                )
                 _ensure_size_within_limit(_get_expected_size(info), "Twitter content")
                 await loop.run_in_executor(None, ydl.download, [url])
 
@@ -651,7 +691,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
             _ensure_file_within_limit(file_path, "Twitter content")
 
             metadata = {
-                "duration": int(info.get("duration", 0)),
+                "duration": _safe_int(info.get("duration"), 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
                 "content_type": content_type,
@@ -664,14 +704,14 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
             if cleanup_on_error and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
             raise
-        except yt_dlp.utils.DownloadError as e:
+        except DownloadError as e:
             error_msg = str(e)
             last_error = e
 
-            if attempt < max_retries - 1:
+            if attempt < retries - 1:
                 wait_time = TWITTER_RETRY_BACKOFF**attempt
                 logger.warning(
-                    f"Twitter extraction failed (attempt {attempt + 1}/{max_retries}). "
+                    f"Twitter extraction failed (attempt {attempt + 1}/{retries}). "
                     f"Retrying in {wait_time}s... Error: {error_msg}"
                 )
                 await asyncio.sleep(wait_time)
@@ -687,9 +727,9 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                 raise
             last_error = e
             logger.error(
-                f"Unexpected error downloading Twitter (attempt {attempt + 1}/{max_retries}): {e}"
+                f"Unexpected error downloading Twitter (attempt {attempt + 1}/{retries}): {e}"
             )
-            if attempt == max_retries - 1:
+            if attempt == retries - 1:
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise

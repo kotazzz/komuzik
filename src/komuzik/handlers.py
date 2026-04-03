@@ -5,8 +5,8 @@ import os
 import re
 import shutil
 import uuid
-from collections.abc import Callable
-from typing import cast
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from telethon import Button, events
 from telethon.tl.custom import Message
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # States for /report command state machine
 REPORT_STATES = {}
 CALLBACK_URLS: dict[str, str] = {}
+CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
 class BotHandlers:
@@ -62,13 +63,17 @@ class BotHandlers:
 
     def _track_user(self, event: Message):
         """Track user activity."""
-        user_id = event.sender_id
+        user_id = cast("int | None", event.sender_id)
+        if user_id is None:
+            return
         username = event.sender.username if event.sender else None
         self.stats.track_user(user_id, username)
 
     def _get_user_info(self, event: Message) -> tuple[int, str | None]:
         """Extract user ID and username from event."""
-        user_id = event.sender_id
+        user_id = cast("int | None", event.sender_id)
+        if user_id is None:
+            raise ValueError("Missing sender_id in Telegram event")
         username = event.sender.username if event.sender else None
         return user_id, username
 
@@ -137,7 +142,12 @@ class BotHandlers:
 
         file_path = None
         try:
-            async with event.client.action(event.chat_id, action):
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, action):
                 try:
                     processing_msg = await event.respond(
                         f"Загрузка {content_type}... Пожалуйста, подождите."
@@ -148,7 +158,8 @@ class BotHandlers:
                     logger.info(f"{content_type.capitalize()} downloaded successfully: {file_path}")
 
                     await send_func(event, file_path, metadata, self.bot_username)
-                    await processing_msg.delete()
+                    if processing_msg is not None:
+                        await processing_msg.delete()
 
                     # Track successful download
                     track_func(user_id, quality, username, success=True)
@@ -212,15 +223,15 @@ class BotHandlers:
             return
 
         # Track search
-        user_id = event.sender_id
-        username = event.sender.username if event.sender else None
+        user_id, username = self._get_user_info(event)
         self.stats.track_search(user_id, username)
 
         searching_msg = await event.respond(f"🔍 Поиск: {query}...")
         results = await search_youtube(query, max_results=5)
 
         if not results:
-            await searching_msg.edit("Ничего не найдено. Попробуйте изменить запрос.")
+            if searching_msg is not None:
+                await searching_msg.edit("Ничего не найдено. Попробуйте изменить запрос.")
             return
 
         buttons = []
@@ -237,7 +248,8 @@ class BotHandlers:
                 ]
             )
 
-        await searching_msg.edit("Выберите видео из результатов поиска:", buttons=buttons)
+        if searching_msg is not None:
+            await searching_msg.edit("Выберите видео из результатов поиска:", buttons=buttons)
 
     async def message_handler(self, event: Message):
         """Handle incoming messages with YouTube, TikTok and Twitter links."""
@@ -322,7 +334,12 @@ class BotHandlers:
 
         file_path = None
         try:
-            async with event.client.action(event.chat_id, "video"):
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, "video"):
                 try:
                     processing_msg = await event.respond(
                         "Загрузка TikTok видео... Пожалуйста, подождите."
@@ -333,7 +350,8 @@ class BotHandlers:
                     logger.info(f"TikTok video downloaded successfully: {file_path}")
 
                     await send_video_content(event, file_path, metadata, self.bot_username)
-                    await processing_msg.delete()
+                    if processing_msg is not None:
+                        await processing_msg.delete()
 
                     # Track successful TikTok download
                     self.stats.track_tiktok_download(user_id, username, success=True)
@@ -372,7 +390,12 @@ class BotHandlers:
 
         file_path = None
         try:
-            async with event.client.action(event.chat_id, "video"):
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, "video"):
                 try:
                     processing_msg = await event.respond(
                         "Загрузка YouTube Short... Пожалуйста, подождите."
@@ -383,7 +406,8 @@ class BotHandlers:
                     logger.info(f"YouTube Short downloaded successfully: {file_path}")
 
                     await send_video_content(event, file_path, metadata, self.bot_username)
-                    await processing_msg.delete()
+                    if processing_msg is not None:
+                        await processing_msg.delete()
 
                     self.stats.track_video_download(
                         user_id, "auto", "youtube_shorts", username, success=True
@@ -624,7 +648,12 @@ class BotHandlers:
 
         file_path = None
         try:
-            async with event.client.action(event.chat_id, "video"):
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, "video"):
                 try:
                     processing_msg = await event.respond(
                         "Загрузка с Twitter... Пожалуйста, подождите."
@@ -640,7 +669,8 @@ class BotHandlers:
                     else:
                         await send_video_content(event, file_path, metadata, self.bot_username)
 
-                    await processing_msg.delete()
+                    if processing_msg is not None:
+                        await processing_msg.delete()
 
                     self.stats.track_tiktok_download(user_id, username, success=True)
 
@@ -694,7 +724,8 @@ class BotHandlers:
             if failed_count > 0:
                 result += f"\n⚠️ Не удалось отправить {failed_count} пользователям"
 
-            await processing_msg.edit(result)
+            if processing_msg is not None:
+                await processing_msg.edit(result)
 
         except Exception as e:
             logger.error(f"Error in post handler: {e}")
@@ -714,16 +745,19 @@ class BotHandlers:
     async def callback_handler(self, event):
         """Handle callback queries from inline buttons."""
         data = event.data.decode("utf-8")
-        user_id = event.sender_id
+        user_id = cast("int | None", event.sender_id)
 
         # Handle report cancel
         if data == "report_cancel":
+            if user_id is None:
+                await event.edit("❌ Не удалось определить пользователя.")
+                return
             REPORT_STATES.pop(user_id, None)
             await event.edit("❌ Отправка отчета отменена.")
             return
 
         # Route callbacks using dictionary
-        handlers: dict[str, Callable] = {
+        handlers: dict[str, CallbackHandler] = {
             "select_": self._handle_select_callback,
             "content_": self._handle_content_callback,
             "quality_": self._handle_quality_callback,

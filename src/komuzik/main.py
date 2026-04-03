@@ -52,7 +52,9 @@ async def main():
     download_limiter = DownloadLimiter(config_loader=config_loader)
 
     # Start the bot
-    client.start(bot_token=BOT_TOKEN or "")
+    start_result = client.start(bot_token=BOT_TOKEN or "")
+    if asyncio.iscoroutine(start_result):
+        await start_result
 
     # Get bot information
     me = await client.get_me()
@@ -64,10 +66,14 @@ async def main():
 
     # Run until disconnected
     try:
-        await client.run_until_disconnected()
+        run_result = client.run_until_disconnected()
+        if asyncio.iscoroutine(run_result):
+            await run_result
     finally:
         db.close()
-        await client.disconnect()
+        disconnect_result = client.disconnect()
+        if asyncio.iscoroutine(disconnect_result):
+            await disconnect_result
 
 
 if __name__ == "__main__":
