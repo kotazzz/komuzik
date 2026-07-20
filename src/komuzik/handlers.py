@@ -77,6 +77,31 @@ def format_ban_message(reason: str) -> str:
     )
 
 
+def _sender_display_name(sender) -> str | None:
+    if sender is None:
+        return None
+    parts = [
+        getattr(sender, "first_name", None),
+        getattr(sender, "last_name", None),
+    ]
+    cleaned = [str(part).strip() for part in parts if part and str(part).strip()]
+    return " ".join(cleaned) if cleaned else None
+
+
+def _entity_display_name(entity) -> str | None:
+    return _sender_display_name(entity)
+
+
+def _media_title(metadata: dict | None) -> str | None:
+    if not metadata:
+        return None
+    title = metadata.get("title") or metadata.get("track")
+    if not title:
+        return None
+    text = str(title).strip()
+    return text or None
+
+
 class BotHandlers:
     """Handles all bot commands and callbacks."""
 
@@ -132,7 +157,8 @@ class BotHandlers:
         if user_id is None:
             return
         username = event.sender.username if event.sender else None
-        self.stats.track_user(user_id, username)
+        display_name = _sender_display_name(event.sender)
+        self.stats.track_user(user_id, username, display_name=display_name)
 
     def _get_user_info(self, event: Message) -> tuple[int, str | None]:
         """Extract user ID and username from event."""
@@ -241,12 +267,26 @@ class BotHandlers:
                         await processing_msg.delete()
 
                     # Track successful download
-                    track_func(user_id, quality, username, success=True)
+                    track_func(
+                        user_id,
+                        quality,
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
+                    )
 
                 except Exception as e:
                     logger.error(f"Error sending {content_type}: {e}")
                     # Track failed download
-                    track_func(user_id, quality, username, success=False, error_message=str(e))
+                    track_func(
+                        user_id,
+                        quality,
+                        username,
+                        success=False,
+                        error_message=str(e),
+                        url=url,
+                    )
                     await event.respond(f"Произошла ошибка при обработке {content_type}: {e!s}")
         finally:
             # Always release the download slot
@@ -1041,12 +1081,25 @@ class BotHandlers:
                     if mode == "audio":
                         file_path, metadata = await download_youtube_audio(entry.url, quality)
                         self.stats.track_audio_download(
-                            user_id, quality, username, success=True, source="dm"
+                            user_id,
+                            quality,
+                            username,
+                            success=True,
+                            source="dm",
+                            url=entry.url,
+                            title=entry.title or _media_title(metadata),
                         )
                     else:
                         file_path, metadata = await download_youtube_video(entry.url, quality)
                         self.stats.track_video_download(
-                            user_id, quality, "youtube", username, success=True, source="dm"
+                            user_id,
+                            quality,
+                            "youtube",
+                            username,
+                            success=True,
+                            source="dm",
+                            url=entry.url,
+                            title=entry.title or _media_title(metadata),
                         )
                     batch.append((file_path, metadata))
                     done += 1
@@ -1070,6 +1123,8 @@ class BotHandlers:
                             success=False,
                             error_message=str(e),
                             source="dm",
+                            url=entry.url,
+                            title=entry.title,
                         )
                     else:
                         self.stats.track_video_download(
@@ -1080,6 +1135,8 @@ class BotHandlers:
                             success=False,
                             error_message=str(e),
                             source="dm",
+                            url=entry.url,
+                            title=entry.title,
                         )
                     try:
                         await event.respond(
@@ -1204,7 +1261,12 @@ class BotHandlers:
                         event, file_path, metadata, self.bot_username, **caption_kwargs
                     )
                 self._track_parsed_download(
-                    parsed, user_id, username, success=True, source="group"
+                    parsed,
+                    user_id,
+                    username,
+                    success=True,
+                    source="group",
+                    metadata=metadata,
                 )
         except Exception as e:
             logger.error(f"Group download failed for {parsed.url}: {e}")
@@ -1270,13 +1332,23 @@ class BotHandlers:
                         await processing_msg.delete()
 
                     # Track successful TikTok download
-                    self.stats.track_tiktok_download(user_id, username, success=True)
+                    self.stats.track_tiktok_download(
+                        user_id,
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
+                    )
 
                 except Exception as e:
                     logger.error(f"Error sending TikTok video: {e}")
                     # Track failed TikTok download
                     self.stats.track_tiktok_download(
-                        user_id, username, success=False, error_message=str(e)
+                        user_id,
+                        username,
+                        success=False,
+                        error_message=str(e),
+                        url=url,
                     )
                     await event.respond(f"Произошла ошибка при обработке TikTok видео: {e!s}")
         finally:
@@ -1341,7 +1413,13 @@ class BotHandlers:
                         await processing_msg.delete()
 
                     self.stats.track_video_download(
-                        user_id, "auto", "youtube_shorts", username, success=True
+                        user_id,
+                        "auto",
+                        "youtube_shorts",
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
                     )
 
                 except Exception as e:
@@ -1353,6 +1431,7 @@ class BotHandlers:
                         username,
                         success=False,
                         error_message=str(e),
+                        url=url,
                     )
                     await event.respond(f"Произошла ошибка при обработке YouTube Short: {e!s}")
         finally:
@@ -1508,9 +1587,24 @@ class BotHandlers:
     async def _download_and_send_video(self, event, url: str, quality: str):
         """Download and send YouTube video."""
 
-        def track_video(user_id, quality, username, success, error_message=None):
+        def track_video(
+            user_id,
+            quality,
+            username,
+            success,
+            error_message=None,
+            url=None,
+            title=None,
+        ):
             self.stats.track_video_download(
-                user_id, quality, "youtube", username, success=success, error_message=error_message
+                user_id,
+                quality,
+                "youtube",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
             )
             if success and not bool(getattr(event, "is_group", False)):
                 try:
@@ -1532,9 +1626,23 @@ class BotHandlers:
     async def _download_and_send_audio(self, event, url: str, quality: str):
         """Download and send YouTube audio."""
 
-        def track_audio(user_id, quality, username, success=True, error_message=None):
+        def track_audio(
+            user_id,
+            quality,
+            username,
+            success=True,
+            error_message=None,
+            url=None,
+            title=None,
+        ):
             self.stats.track_audio_download(
-                user_id, quality, username, success=success, error_message=error_message
+                user_id,
+                quality,
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
             )
             if success and not bool(getattr(event, "is_group", False)):
                 try:
@@ -1651,12 +1759,22 @@ class BotHandlers:
                     if processing_msg is not None:
                         await processing_msg.delete()
 
-                    self.stats.track_tiktok_download(user_id, username, success=True)
+                    self.stats.track_tiktok_download(
+                        user_id,
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
+                    )
 
                 except Exception as e:
                     logger.error(f"Error sending Twitter content: {e}")
                     self.stats.track_tiktok_download(
-                        user_id, username, success=False, error_message=str(e)
+                        user_id,
+                        username,
+                        success=False,
+                        error_message=str(e),
+                        url=url,
                     )
                     await event.respond(f"Произошла ошибка при обработке контента: {e!s}")
         finally:
@@ -1710,12 +1828,22 @@ class BotHandlers:
                     if processing_msg is not None:
                         await processing_msg.delete()
 
-                    self.stats.track_pinterest_download(user_id, username, success=True)
+                    self.stats.track_pinterest_download(
+                        user_id,
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
+                    )
 
                 except Exception as e:
                     logger.error(f"Error sending Pinterest content: {e}")
                     self.stats.track_pinterest_download(
-                        user_id, username, success=False, error_message=str(e)
+                        user_id,
+                        username,
+                        success=False,
+                        error_message=str(e),
+                        url=url,
                     )
                     await event.respond(f"Произошла ошибка при обработке Pinterest: {e!s}")
         finally:
@@ -2294,13 +2422,15 @@ class BotHandlers:
             return
 
         username = None
+        display_name = None
         try:
             user = await self.client.get_entity(user_id)
             username = getattr(user, "username", None)
+            display_name = _entity_display_name(user)
         except Exception:
             pass
 
-        self.stats.track_user(user_id, username)
+        self.stats.track_user(user_id, username, display_name=display_name)
 
         download_id = str(uuid.uuid4())
         if not await self.download_limiter.start_download(user_id, download_id):
@@ -2330,7 +2460,9 @@ class BotHandlers:
                 )
                 try:
                     await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
-                    self._track_inline_download(parsed, user_id, username, success=True)
+                    self._track_inline_download(
+                        parsed, user_id, username, success=True, metadata=metadata
+                    )
                 finally:
                     await delete_staging(self.client, storage_chat_id, [staging_msg])
             else:
@@ -2348,14 +2480,20 @@ class BotHandlers:
                     if is_pm_unavailable_error(e):
                         await edit_inline_text(self.client, inline_msg_id, PM_UNAVAILABLE_MESSAGE)
                         self._track_inline_download(
-                            parsed, user_id, username, success=False, error_message=str(e)
+                            parsed,
+                            user_id,
+                            username,
+                            success=False,
+                            error_message=str(e),
                         )
                         return
                     raise
 
                 await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
                 await delete_staging_message(self.client, user_id, staging_msg)
-                self._track_inline_download(parsed, user_id, username, success=True)
+                self._track_inline_download(
+                    parsed, user_id, username, success=True, metadata=metadata
+                )
 
         except Exception as e:
             logger.error(f"Inline download failed for {parsed.url}: {e}")
@@ -2410,6 +2548,7 @@ class BotHandlers:
         *,
         success: bool,
         error_message: str | None = None,
+        metadata: dict | None = None,
     ):
         """Record inline download stats with source=inline."""
         self._track_parsed_download(
@@ -2419,6 +2558,7 @@ class BotHandlers:
             success=success,
             error_message=error_message,
             source="inline",
+            metadata=metadata,
         )
 
     def _track_parsed_download(
@@ -2430,8 +2570,10 @@ class BotHandlers:
         success: bool,
         source: str,
         error_message: str | None = None,
+        metadata: dict | None = None,
     ):
         """Record download stats for a parsed media link."""
+        title = _media_title(metadata) or parsed.description
         if parsed.platform == "youtube" and parsed.mode == "audio":
             self.stats.track_audio_download(
                 user_id,
@@ -2440,6 +2582,8 @@ class BotHandlers:
                 success=success,
                 error_message=error_message,
                 source=source,
+                url=parsed.url,
+                title=title,
             )
         elif parsed.platform in {"youtube", "youtube_shorts"}:
             platform = "youtube_shorts" if parsed.platform == "youtube_shorts" else "youtube"
@@ -2451,6 +2595,8 @@ class BotHandlers:
                 success=success,
                 error_message=error_message,
                 source=source,
+                url=parsed.url,
+                title=title,
             )
         elif parsed.platform == "pinterest":
             self.stats.track_pinterest_download(
@@ -2459,6 +2605,8 @@ class BotHandlers:
                 success=success,
                 error_message=error_message,
                 source=source,
+                url=parsed.url,
+                title=title,
             )
         else:
             # tiktok + twitter (existing DM path also uses tiktok tracker for twitter)
@@ -2468,4 +2616,6 @@ class BotHandlers:
                 success=success,
                 error_message=error_message,
                 source=source,
+                url=parsed.url,
+                title=title,
             )

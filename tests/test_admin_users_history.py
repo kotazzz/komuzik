@@ -2,7 +2,11 @@ import tempfile
 from pathlib import Path
 
 from komuzik.database import Database
-from komuzik.repository import StatsRepository
+from komuzik.repository import (
+    StatsRepository,
+    format_download_history_line,
+    format_user_label,
+)
 
 
 def _repo() -> tuple[Database, StatsRepository]:
@@ -107,3 +111,55 @@ def test_list_users_pagination_and_download_types():
         assert len(page) == 1
     finally:
         db.close()
+
+
+def test_format_download_history_line_with_link():
+    row = {
+        "event_type": "video_download",
+        "platform": "youtube",
+        "video_format": "720p",
+        "url": "https://youtube.com/watch?v=abc",
+        "title": "My [Video] (clip)",
+        "success": True,
+        "timestamp": "2026-07-20 13:10:00",
+    }
+    line = format_download_history_line(row)
+    assert line.startswith("• [My Video clip]")
+    assert "(https://youtube.com/watch?v=abc)" in line
+    assert "youtube · video 720p" in line
+
+
+def test_format_download_history_line_without_link():
+    row = {
+        "event_type": "audio_download",
+        "platform": "youtube",
+        "video_format": "high",
+        "url": None,
+        "title": None,
+        "success": True,
+        "timestamp": "2026-07-20 13:10:00",
+    }
+    line = format_download_history_line(row)
+    assert line.startswith("• youtube · audio high")
+
+
+def test_format_download_history_line_failed():
+    row = {
+        "event_type": "video_download",
+        "platform": "youtube",
+        "video_format": "720p",
+        "url": "https://youtube.com/watch?v=abc",
+        "title": "Fail",
+        "success": False,
+        "timestamp": "2026-07-20 13:10:00",
+    }
+    line = format_download_history_line(row)
+    assert line.startswith("✗ • [Fail]")
+
+
+def test_format_user_label():
+    assert format_user_label({"id": 1, "display_name": "Alice A", "username": "alice"}) == (
+        "Alice A (@alice)"
+    )
+    assert format_user_label({"id": 2, "username": "bob"}) == "— (@bob)"
+    assert format_user_label({"id": 3}) == "3"

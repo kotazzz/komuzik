@@ -2,9 +2,11 @@
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .database import Database
-from .timeutil import today_msk
+from .timeutil import MSK, today_msk
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,84 @@ def _normalize_default_quality(value: str | None) -> str:
     if value in ALLOWED_DEFAULT_QUALITIES:
         return value
     return "720p"
+
+
+def _escape_markdown_title(title: str) -> str:
+    """Strip markdown-sensitive characters from a history link title."""
+    for ch in "[]()":
+        title = title.replace(ch, "")
+    return title.strip()
+
+
+def _format_history_timestamp(timestamp: str | None) -> str:
+    if not timestamp:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(timestamp).replace(" ", "T"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(MSK)
+        else:
+            dt = dt.astimezone(MSK)
+        return dt.strftime("%d.%m %H:%M")
+    except (TypeError, ValueError):
+        text = str(timestamp)
+        return text[:16] if len(text) >= 16 else text
+
+
+def _history_type_label(event_type: str | None, video_format: str | None) -> str:
+    fmt = (video_format or "").strip()
+    if event_type == "video_download":
+        return f"video {fmt}".strip()
+    if event_type == "audio_download":
+        return f"audio {fmt}".strip()
+    return ""
+
+
+def format_download_history_line(row: dict) -> str:
+    """Format one download history row as a Markdown bullet line."""
+    success = row.get("success", True)
+    prefix = "✗ " if not success else ""
+    bullet = f"{prefix}• "
+
+    url = row.get("url")
+    title = row.get("title")
+    platform = (row.get("platform") or "").strip()
+    type_label = _history_type_label(row.get("event_type"), row.get("video_format"))
+    ts = _format_history_timestamp(row.get("timestamp"))
+
+    detail_parts: list[str] = []
+    if platform:
+        detail_parts.append(platform)
+    if type_label:
+        detail_parts.append(type_label)
+    if ts:
+        detail_parts.append(ts)
+
+    if url and title:
+        safe_title = _escape_markdown_title(str(title))
+        line = f"{bullet}[{safe_title}]({url})"
+        if detail_parts:
+            line += " · " + " · ".join(detail_parts)
+        return line
+
+    if detail_parts:
+        return bullet + " · ".join(detail_parts)
+    return bullet.rstrip()
+
+
+def format_user_label(user: dict) -> str:
+    """Format a user dict for admin list rows and buttons."""
+    user_id = user.get("id") if user.get("id") is not None else user.get("user_id")
+    username = user.get("username")
+    display_name = (user.get("display_name") or "").strip() or None
+
+    if display_name and username:
+        return f"{display_name} (@{username})"
+    if display_name:
+        return display_name
+    if username:
+        return f"— (@{username})"
+    return str(user_id)
 
 
 class StatsRepository:
