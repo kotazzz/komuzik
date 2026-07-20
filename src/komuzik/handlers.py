@@ -694,7 +694,7 @@ class BotHandlers:
             await self.download_limiter.finish_download(user_id, download_id)
 
     async def _show_content_type_selection(self, event: Message, url: str):
-        """Show content type selection buttons for YouTube."""
+        """Show content type selection buttons for YouTube (+ last format repeat)."""
         token = self._store_callback_url(url)
         buttons = [
             [
@@ -702,6 +702,15 @@ class BotHandlers:
                 Button.inline("🎵 Аудио", data=f"content_audio_{token}"),
             ]
         ]
+        user_id = cast("int | None", event.sender_id)
+        if user_id is not None:
+            settings = self.stats.get_user_settings(user_id)
+            if settings.last_mode and settings.last_quality:
+                if settings.last_mode == "audio":
+                    label = f"🔄 Аудио {settings.last_quality}"
+                else:
+                    label = f"🔄 Видео {settings.last_quality}"
+                buttons.append([Button.inline(label, data=f"content_repeat_{token}")])
         await event.respond("Выберите тип контента для загрузки:", buttons=buttons)
 
     async def _handle_youtube_shorts(self, event: Message, url: str):
@@ -770,7 +779,7 @@ class BotHandlers:
         await self._show_content_type_selection(event, url)
 
     async def _handle_content_callback(self, event, data: str):
-        """Handle content type selection (video/audio)."""
+        """Handle content type selection (video/audio/repeat last)."""
         parts = data.split("_", 2)
         if len(parts) != 3:
             return
@@ -779,6 +788,29 @@ class BotHandlers:
         url = self._resolve_callback_url(token)
         if not url:
             await event.edit("Ссылка для этого выбора больше недоступна. Повторите поиск.")
+            return
+
+        if content_type == "repeat":
+            user_id = cast("int | None", event.sender_id)
+            if user_id is None:
+                await event.answer("Не удалось определить пользователя.", alert=True)
+                return
+            settings = self.stats.get_user_settings(user_id)
+            if not settings.last_mode or not settings.last_quality:
+                await event.answer("Нет сохранённого формата — выберите вручную.", alert=True)
+                return
+            mode = settings.last_mode
+            quality = settings.last_quality
+            await event.answer(
+                f"Повтор: {'аудио' if mode == 'audio' else 'видео'} {quality}..."
+            )
+            try:
+                if mode == "audio":
+                    await self._download_and_send_audio(event, url, quality)
+                else:
+                    await self._download_and_send_video(event, url, quality)
+            finally:
+                CALLBACK_URLS.pop(token, None)
             return
 
         if content_type == "video":
@@ -888,6 +920,11 @@ class BotHandlers:
             self.stats.track_video_download(
                 user_id, quality, "youtube", username, success=success, error_message=error_message
             )
+            if success and not bool(getattr(event, "is_group", False)):
+                try:
+                    self.stats.set_user_last_format(user_id, "video", quality)
+                except Exception as e:
+                    logger.error(f"Failed to save last format: {e}")
 
         await self._download_and_send_content(
             event=event,
@@ -902,6 +939,17 @@ class BotHandlers:
 
     async def _download_and_send_audio(self, event, url: str, quality: str):
         """Download and send YouTube audio."""
+
+        def track_audio(user_id, quality, username, success=True, error_message=None):
+            self.stats.track_audio_download(
+                user_id, quality, username, success=success, error_message=error_message
+            )
+            if success and not bool(getattr(event, "is_group", False)):
+                try:
+                    self.stats.set_user_last_format(user_id, "audio", quality)
+                except Exception as e:
+                    logger.error(f"Failed to save last format: {e}")
+
         await self._download_and_send_content(
             event=event,
             url=url,
@@ -909,7 +957,7 @@ class BotHandlers:
             content_type="аудио",
             download_func=download_youtube_audio,
             send_func=send_audio_content,
-            track_func=self.stats.track_audio_download,
+            track_func=track_audio,
             action="audio",
         )
 

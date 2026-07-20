@@ -138,6 +138,8 @@ class Database:
 
         self._ensure_column(cursor, "user_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "chat_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
+        self._ensure_column(cursor, "user_settings", "last_mode", "TEXT")
+        self._ensure_column(cursor, "user_settings", "last_quality", "TEXT")
 
         # Create indexes for better query performance
         cursor.execute("""

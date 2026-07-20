@@ -29,6 +29,8 @@ class UserSettings:
     show_bot_caption: bool = True
     show_title: bool = True
     default_quality: str = "720p"
+    last_mode: str | None = None  # video | audio
+    last_quality: str | None = None
 
 
 @dataclass(frozen=True)
@@ -621,17 +623,24 @@ class StatsRepository:
         """Return caption settings for a user (defaults: both enabled, 720p)."""
         try:
             row = self.db.fetchone(
-                """SELECT show_bot_caption, show_title, default_quality
+                """SELECT show_bot_caption, show_title, default_quality,
+                          last_mode, last_quality
                    FROM user_settings WHERE user_id = ?""",
                 (user_id,),
             )
             if not row:
                 return UserSettings(user_id=user_id)
+            last_mode = row[3] if row[3] in {"video", "audio"} else None
+            last_quality = str(row[4]) if row[4] else None
+            if last_mode and not last_quality:
+                last_mode = None
             return UserSettings(
                 user_id=user_id,
                 show_bot_caption=bool(row[0]),
                 show_title=bool(row[1]),
                 default_quality=_normalize_default_quality(row[2]),
+                last_mode=last_mode,
+                last_quality=last_quality,
             )
         except Exception as e:
             logger.error(f"Failed to get settings for {user_id}: {e}")
@@ -644,19 +653,34 @@ class StatsRepository:
         show_bot_caption: bool,
         show_title: bool,
         default_quality: str,
+        last_mode: str | None = None,
+        last_quality: str | None = None,
     ) -> UserSettings:
         quality = _normalize_default_quality(default_quality)
+        if last_mode not in {"video", "audio"}:
+            last_mode = None
+            last_quality = None
         try:
             self.db.execute(
                 """INSERT INTO user_settings
-                   (user_id, show_bot_caption, show_title, default_quality, updated_at)
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   (user_id, show_bot_caption, show_title, default_quality,
+                    last_mode, last_quality, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(user_id) DO UPDATE SET
                      show_bot_caption = excluded.show_bot_caption,
                      show_title = excluded.show_title,
                      default_quality = excluded.default_quality,
+                     last_mode = excluded.last_mode,
+                     last_quality = excluded.last_quality,
                      updated_at = CURRENT_TIMESTAMP""",
-                (user_id, int(show_bot_caption), int(show_title), quality),
+                (
+                    user_id,
+                    int(show_bot_caption),
+                    int(show_title),
+                    quality,
+                    last_mode,
+                    last_quality,
+                ),
             )
         except Exception as e:
             logger.error(f"Failed to save settings for {user_id}: {e}")
@@ -665,6 +689,8 @@ class StatsRepository:
             show_bot_caption=show_bot_caption,
             show_title=show_title,
             default_quality=quality,
+            last_mode=last_mode,
+            last_quality=last_quality,
         )
 
     def set_user_setting(self, user_id: int, key: str, value: bool) -> UserSettings:
@@ -680,6 +706,8 @@ class StatsRepository:
             show_bot_caption=show_bot,
             show_title=show_title,
             default_quality=current.default_quality,
+            last_mode=current.last_mode,
+            last_quality=current.last_quality,
         )
 
     def set_user_default_quality(self, user_id: int, quality: str) -> UserSettings:
@@ -690,6 +718,22 @@ class StatsRepository:
             show_bot_caption=current.show_bot_caption,
             show_title=current.show_title,
             default_quality=quality,
+            last_mode=current.last_mode,
+            last_quality=current.last_quality,
+        )
+
+    def set_user_last_format(self, user_id: int, mode: str, quality: str) -> UserSettings:
+        """Remember last successful DM YouTube format for quick repeat."""
+        if mode not in {"video", "audio"} or not quality:
+            raise ValueError(f"Invalid last format: {mode}/{quality}")
+        current = self.get_user_settings(user_id)
+        return self._save_user_settings(
+            user_id,
+            show_bot_caption=current.show_bot_caption,
+            show_title=current.show_title,
+            default_quality=current.default_quality,
+            last_mode=mode,
+            last_quality=quality,
         )
 
     def toggle_user_setting(self, user_id: int, key: str) -> UserSettings:
