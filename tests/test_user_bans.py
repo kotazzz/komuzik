@@ -2,7 +2,17 @@ import tempfile
 from pathlib import Path
 
 from komuzik.database import Database
+from komuzik.handlers import format_ban_message
 from komuzik.repository import StatsRepository
+
+
+def test_format_ban_message():
+    msg = format_ban_message("спам")
+    assert msg == (
+        "🚫 Вы заблокированы.\n"
+        "Причина: спам\n"
+        "Если ошибка — /report"
+    )
 
 
 def test_ban_get_and_is_banned():

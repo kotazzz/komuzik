@@ -69,6 +69,14 @@ INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
+def format_ban_message(reason: str) -> str:
+    return (
+        "🚫 Вы заблокированы.\n"
+        f"Причина: {reason}\n"
+        "Если ошибка — /report"
+    )
+
+
 class BotHandlers:
     """Handles all bot commands and callbacks."""
 
@@ -97,6 +105,8 @@ class BotHandlers:
             self.unsetstorage_handler
         )
         self.client.on(events.NewMessage(pattern=r"^/admin(?:@\w+)?"))(self.admin_handler)
+        self.client.on(events.NewMessage(pattern=r"^/ban(?:@\w+)?(?:\s+(.+))?"))(self.ban_handler)
+        self.client.on(events.NewMessage(pattern=r"^/unban(?:@\w+)?(?:\s+(.+))?"))(self.unban_handler)
         self.client.on(events.NewMessage(pattern=r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?"))(
             self.setconcurrent_handler
         )
@@ -246,11 +256,21 @@ class BotHandlers:
 
     async def start_handler(self, event: Message):
         """Handle /start command."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
         self._track_user(event)
         await event.respond(MSG_START)
 
     async def help_handler(self, event: Message):
         """Handle /help command."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
         self._track_user(event)
         await event.respond(MSG_HELP)
 
@@ -267,8 +287,12 @@ class BotHandlers:
 
     async def settings_handler(self, event: Message):
         """Handle /settings — personal in DM, chat settings in groups (admins only)."""
-        self._track_user(event)
         user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
+        self._track_user(event)
 
         if bool(getattr(event, "is_group", False)):
             if not await self._is_chat_admin(event):
@@ -414,6 +438,11 @@ class BotHandlers:
 
     async def stats_handler(self, event: Message):
         """Handle /stats command."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
         self._track_user(event)
 
         buttons = [
@@ -431,6 +460,11 @@ class BotHandlers:
 
     async def search_handler(self, event: Message):
         """Handle /search command."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
         self._track_user(event)
 
         text = getattr(event.message, "text", None)
@@ -482,6 +516,7 @@ class BotHandlers:
         """Handle incoming messages with YouTube, TikTok, Twitter and Pinterest links."""
         message_obj = event.message
         user_id, username = self._get_user_info(event)
+        chat_is_group = bool(getattr(event, "is_group", False))
 
         # Admin reply to a report → copy 1:1 to the reporter (quote their report)
         if await self._maybe_handle_report_reply(event, message_obj, user_id):
@@ -536,11 +571,16 @@ class BotHandlers:
             del REPORT_STATES[user_id]
             return
 
+        text = getattr(message_obj, "text", None) if message_obj is not None else None
+        if isinstance(text, str) and re.match(r"^/report(?:@\w+)?(?:\s|$)", text):
+            pass
+        elif await self._reject_if_banned(event, user_id, chat_is_group=chat_is_group):
+            return
+
         # Playlist exclusion reply (must reply to preview message)
         if await self._maybe_handle_playlist_exclusion_reply(event, message_obj, user_id):
             return
 
-        text = getattr(message_obj, "text", None) if message_obj is not None else None
         if not isinstance(text, str) or not text:
             return
 
@@ -1732,6 +1772,29 @@ class BotHandlers:
     def _is_bot_admin(self, user_id: int) -> bool:
         return user_id in self.download_limiter.ADMIN_USER_IDS
 
+    async def _reject_if_banned(
+        self, event: Any, user_id: int, *, chat_is_group: bool
+    ) -> bool:
+        """Return True if the handler should stop (user is banned)."""
+        if self._is_bot_admin(user_id):
+            return False
+        reason = self.stats.get_ban(user_id)
+        if reason is None:
+            return False
+        if chat_is_group:
+            return True
+        msg = format_ban_message(reason)
+        try:
+            if hasattr(event, "respond"):
+                await event.respond(msg)
+            elif hasattr(event, "edit"):
+                await event.edit(msg)
+            else:
+                logger.warning("Cannot notify banned user: unsupported event type")
+        except Exception as e:
+            logger.error(f"Failed to send ban message to {user_id}: {e}")
+        return True
+
     def _parse_positive_int(self, text: str | None) -> int | None:
         if text is None:
             return None
@@ -1748,12 +1811,15 @@ class BotHandlers:
             default=self.download_limiter._yaml_concurrent
         )
         playlist_limit = self.stats.get_playlist_daily_limit()
+        ban_count = self.stats.count_bans()
         return (
             "🛠 **Админ-панель**\n\n"
             f"Одновременных загрузок: **{concurrent}**\n"
-            f"Плейлист / сутки (глобально): **{playlist_limit}**\n\n"
+            f"Плейлист / сутки (глобально): **{playlist_limit}**\n"
+            f"Банов: **{ban_count}**\n\n"
             "Персональный лимит: /setuserlimit <id> N\n"
-            "Сброс: /unsetuserlimit <id>"
+            "Сброс: /unsetuserlimit <id>\n"
+            "Бан: /ban <id> причина · /unban <id>"
         )
 
     def _admin_panel_buttons(self) -> list:
@@ -1772,6 +1838,41 @@ class BotHandlers:
             self._format_admin_panel(),
             buttons=self._admin_panel_buttons(),
         )
+
+    async def ban_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None) or ""
+        match = re.match(r"^/ban(?:@\w+)?\s+(\d+)\s+(.+)", text, re.DOTALL)
+        if not match:
+            await event.respond("Использование: /ban <user_id> <причина>")
+            return
+        target_id = int(match.group(1))
+        reason = match.group(2).strip()
+        if not reason:
+            await event.respond("Использование: /ban <user_id> <причина>")
+            return
+        if target_id in self.download_limiter.ADMIN_USER_IDS:
+            await event.respond("❌ Нельзя забанить администратора.")
+            return
+        self.stats.ban_user(target_id, reason, banned_by=user_id)
+        await event.respond(f"✅ Пользователь `{target_id}` забанен.\nПричина: {reason}")
+
+    async def unban_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None) or ""
+        match = re.match(r"^/unban(?:@\w+)?\s+(\d+)", text)
+        if not match:
+            await event.respond("Использование: /unban <user_id>")
+            return
+        target_id = int(match.group(1))
+        if self.stats.unban_user(target_id):
+            await event.respond(f"✅ Пользователь `{target_id}` разбанен.")
+        else:
+            await event.respond(f"ℹ️ Пользователь `{target_id}` не в бане.")
 
     async def setconcurrent_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -1960,13 +2061,19 @@ class BotHandlers:
             await event.answer()
             return
 
-        # Handle report cancel
+        # Handle report cancel (allowlist for banned users)
         if data == "report_cancel":
             if user_id is None:
                 await event.edit("❌ Не удалось определить пользователя.")
                 return
             REPORT_STATES.pop(user_id, None)
             await event.edit("❌ Отправка отчета отменена.")
+            return
+
+        if user_id is not None and await self._reject_if_banned(
+            event, user_id, chat_is_group=not bool(getattr(event, "is_private", True))
+        ):
+            await event.answer()
             return
 
         if data.startswith("settings_"):
@@ -2115,6 +2222,19 @@ class BotHandlers:
         """Answer inline queries with a placeholder article for supported links."""
         query_text = event.text or ""
         user_id = cast("int | None", event.sender_id)
+        if user_id is not None and not self._is_bot_admin(user_id):
+            reason = self.stats.get_ban(user_id)
+            if reason is not None:
+                builder = event.builder
+                blocked = await builder.article(
+                    title="🚫 Доступ ограничен",
+                    description=reason[:64],
+                    text=format_ban_message(reason),
+                    id="banned",
+                )
+                await event.answer([blocked], cache_time=0)
+                return
+
         default_quality = "720p"
         if user_id is not None:
             default_quality = self.stats.get_user_settings(user_id).default_quality
@@ -2154,6 +2274,15 @@ class BotHandlers:
         token = event.id
         inline_msg_id = event.msg_id
         user_id = event.user_id
+
+        if not self._is_bot_admin(user_id):
+            reason = self.stats.get_ban(user_id)
+            if reason is not None and inline_msg_id is not None:
+                await edit_inline_text(
+                    self.client, inline_msg_id, format_ban_message(reason)
+                )
+                return
+
         parsed = INLINE_JOBS.pop(token, None)
 
         if parsed is None:
