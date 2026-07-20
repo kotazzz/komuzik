@@ -235,14 +235,39 @@ class BotHandlers:
         return count
 
     async def settings_handler(self, event: Message):
-        """Handle /settings command."""
+        """Handle /settings — personal in DM, chat settings in groups (admins only)."""
         self._track_user(event)
         user_id, _ = self._get_user_info(event)
+
+        if bool(getattr(event, "is_group", False)):
+            if not await self._is_chat_admin(event):
+                await event.respond("❌ Только администраторы могут менять настройки чата.")
+                return
+            chat_id = int(event.chat_id)
+            settings = self.stats.get_chat_settings(chat_id)
+            await event.respond(
+                self._format_chat_settings_message(settings),
+                buttons=self._chat_settings_buttons(settings),
+            )
+            return
+
         settings = self.stats.get_user_settings(user_id)
         await event.respond(
             self._format_settings_message(settings),
             buttons=self._settings_buttons(settings),
         )
+
+    async def _is_chat_admin(self, event: Message) -> bool:
+        """Return True if the sender is any admin/creator of the chat."""
+        sender_id = cast("int | None", event.sender_id)
+        if sender_id is None:
+            return False
+        try:
+            perms = await self.client.get_permissions(event.chat_id, sender_id)
+            return bool(getattr(perms, "is_admin", False) or getattr(perms, "is_creator", False))
+        except Exception as e:
+            logger.error(f"Failed to check admin rights: {e}")
+            return False
 
     def _format_settings_message(self, settings) -> str:
         bot_state = "✅ Вкл" if settings.show_bot_caption else "❌ Выкл"
@@ -264,6 +289,55 @@ class BotHandlers:
         return [
             [Button.inline(bot_label, data="settings_bot")],
             [Button.inline(title_label, data="settings_title")],
+        ]
+
+    def _format_chat_settings_message(self, settings) -> str:
+        def state(on: bool) -> str:
+            return "✅ Вкл" if on else "❌ Выкл"
+
+        return (
+            "⚙️ **Настройки чата**\n\n"
+            f"▶ YouTube: {state(settings.allow_youtube)}\n"
+            f"♪ TikTok: {state(settings.allow_tiktok)}\n"
+            f"𝕏 Twitter/X: {state(settings.allow_twitter)}\n"
+            f"📌 Pinterest: {state(settings.allow_pinterest)}\n\n"
+            f"🤖 Подпись бота: {state(settings.show_bot_caption)}\n"
+            f"📝 Название видео: {state(settings.show_title)}\n\n"
+            "Выключенные платформы бот игнорирует. Только для этой группы."
+        )
+
+    def _chat_settings_buttons(self, settings):
+        def label(name: str, on: bool) -> str:
+            mark = "✅" if on else "❌"
+            return f"{mark} {name}"
+
+        return [
+            [
+                Button.inline(
+                    label("YouTube", settings.allow_youtube), data="chatset_allow_youtube"
+                ),
+                Button.inline(label("TikTok", settings.allow_tiktok), data="chatset_allow_tiktok"),
+            ],
+            [
+                Button.inline(
+                    label("Twitter/X", settings.allow_twitter), data="chatset_allow_twitter"
+                ),
+                Button.inline(
+                    label("Pinterest", settings.allow_pinterest), data="chatset_allow_pinterest"
+                ),
+            ],
+            [
+                Button.inline(
+                    label("Подпись бота", settings.show_bot_caption),
+                    data="chatset_show_bot_caption",
+                ),
+            ],
+            [
+                Button.inline(
+                    label("Название", settings.show_title),
+                    data="chatset_show_title",
+                ),
+            ],
         ]
 
     async def stats_handler(self, event: Message):
@@ -444,6 +518,11 @@ class BotHandlers:
         if parsed is None:
             return
 
+        chat_id = int(event.chat_id)
+        chat_settings = self.stats.get_chat_settings(chat_id)
+        if not chat_settings.allows_platform(parsed.platform):
+            return
+
         user_id, username = self._get_user_info(event)
         self._track_user(event)
         download_id = str(uuid.uuid4())
@@ -471,7 +550,8 @@ class BotHandlers:
                 )
                 file_path, metadata, media_kind = await self._download_for_inline(parsed)
                 caption_kwargs = {
-                    **self._caption_kwargs(user_id),
+                    "show_bot_caption": chat_settings.show_bot_caption,
+                    "show_title": chat_settings.show_title,
                     "reply_to": reply_to,
                 }
                 if media_kind == "audio":
@@ -1076,6 +1156,10 @@ class BotHandlers:
             await self._handle_settings_callback(event, data)
             return
 
+        if data.startswith("chatset_"):
+            await self._handle_chat_settings_callback(event, data)
+            return
+
         # Route callbacks using dictionary
         handlers: dict[str, CallbackHandler] = {
             "select_": self._handle_select_callback,
@@ -1110,6 +1194,32 @@ class BotHandlers:
         await event.edit(
             self._format_settings_message(settings),
             buttons=self._settings_buttons(settings),
+        )
+        await event.answer("Сохранено")
+
+    async def _handle_chat_settings_callback(self, event, data: str):
+        """Toggle group chat settings (admins only)."""
+        if not await self._is_chat_admin(event):
+            await event.answer("Только администраторы могут менять настройки.", alert=True)
+            return
+
+        key = data.removeprefix("chatset_")
+        if key not in {
+            "allow_youtube",
+            "allow_tiktok",
+            "allow_twitter",
+            "allow_pinterest",
+            "show_bot_caption",
+            "show_title",
+        }:
+            await event.answer()
+            return
+
+        chat_id = int(event.chat_id)
+        settings = self.stats.toggle_chat_setting(chat_id, key)
+        await event.edit(
+            self._format_chat_settings_message(settings),
+            buttons=self._chat_settings_buttons(settings),
         )
         await event.answer("Сохранено")
 

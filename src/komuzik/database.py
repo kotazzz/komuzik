@@ -120,6 +120,20 @@ class Database:
             )
         """)
 
+        # Per-chat settings for groups (platforms + captions)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_settings (
+                chat_id INTEGER PRIMARY KEY,
+                allow_youtube INTEGER NOT NULL DEFAULT 1,
+                allow_tiktok INTEGER NOT NULL DEFAULT 1,
+                allow_twitter INTEGER NOT NULL DEFAULT 1,
+                allow_pinterest INTEGER NOT NULL DEFAULT 1,
+                show_bot_caption INTEGER NOT NULL DEFAULT 1,
+                show_title INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Create indexes for better query performance
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_statistics_event_type 

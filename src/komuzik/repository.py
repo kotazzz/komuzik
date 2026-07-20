@@ -30,6 +30,41 @@ class UserSettings:
     show_title: bool = True
 
 
+@dataclass(frozen=True)
+class ChatSettings:
+    """Per-chat group settings for platforms and captions."""
+
+    chat_id: int
+    allow_youtube: bool = True
+    allow_tiktok: bool = True
+    allow_twitter: bool = True
+    allow_pinterest: bool = True
+    show_bot_caption: bool = True
+    show_title: bool = True
+
+    def allows_platform(self, platform: str) -> bool:
+        """Return whether auto-download is enabled for a parsed platform key."""
+        if platform in {"youtube", "youtube_shorts"}:
+            return self.allow_youtube
+        if platform == "tiktok":
+            return self.allow_tiktok
+        if platform == "twitter":
+            return self.allow_twitter
+        if platform == "pinterest":
+            return self.allow_pinterest
+        return True
+
+
+CHAT_SETTING_KEYS = {
+    "allow_youtube",
+    "allow_tiktok",
+    "allow_twitter",
+    "allow_pinterest",
+    "show_bot_caption",
+    "show_title",
+}
+
+
 class StatsRepository:
     """Repository for managing bot statistics."""
 
@@ -627,3 +662,81 @@ class StatsRepository:
         if key == "show_title":
             return self.set_user_setting(user_id, key, not current.show_title)
         raise ValueError(f"Unknown settings key: {key}")
+
+    # === Chat settings (groups) ===
+
+    def get_chat_settings(self, chat_id: int) -> ChatSettings:
+        """Return group settings (defaults: all enabled)."""
+        try:
+            row = self.db.fetchone(
+                """SELECT allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
+                          show_bot_caption, show_title
+                   FROM chat_settings WHERE chat_id = ?""",
+                (chat_id,),
+            )
+            if not row:
+                return ChatSettings(chat_id=chat_id)
+            return ChatSettings(
+                chat_id=chat_id,
+                allow_youtube=bool(row[0]),
+                allow_tiktok=bool(row[1]),
+                allow_twitter=bool(row[2]),
+                allow_pinterest=bool(row[3]),
+                show_bot_caption=bool(row[4]),
+                show_title=bool(row[5]),
+            )
+        except Exception as e:
+            logger.error(f"Failed to get chat settings for {chat_id}: {e}")
+            return ChatSettings(chat_id=chat_id)
+
+    def set_chat_setting(self, chat_id: int, key: str, value: bool) -> ChatSettings:
+        """Upsert a single chat setting key."""
+        if key not in CHAT_SETTING_KEYS:
+            raise ValueError(f"Unknown chat settings key: {key}")
+
+        current = self.get_chat_settings(chat_id)
+        updated = {
+            "allow_youtube": current.allow_youtube,
+            "allow_tiktok": current.allow_tiktok,
+            "allow_twitter": current.allow_twitter,
+            "allow_pinterest": current.allow_pinterest,
+            "show_bot_caption": current.show_bot_caption,
+            "show_title": current.show_title,
+        }
+        updated[key] = value
+
+        try:
+            self.db.execute(
+                """INSERT INTO chat_settings (
+                       chat_id, allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
+                       show_bot_caption, show_title, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(chat_id) DO UPDATE SET
+                     allow_youtube = excluded.allow_youtube,
+                     allow_tiktok = excluded.allow_tiktok,
+                     allow_twitter = excluded.allow_twitter,
+                     allow_pinterest = excluded.allow_pinterest,
+                     show_bot_caption = excluded.show_bot_caption,
+                     show_title = excluded.show_title,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (
+                    chat_id,
+                    int(updated["allow_youtube"]),
+                    int(updated["allow_tiktok"]),
+                    int(updated["allow_twitter"]),
+                    int(updated["allow_pinterest"]),
+                    int(updated["show_bot_caption"]),
+                    int(updated["show_title"]),
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to save chat settings for {chat_id}: {e}")
+
+        return ChatSettings(chat_id=chat_id, **updated)
+
+    def toggle_chat_setting(self, chat_id: int, key: str) -> ChatSettings:
+        """Toggle a boolean chat setting and return the updated settings."""
+        if key not in CHAT_SETTING_KEYS:
+            raise ValueError(f"Unknown chat settings key: {key}")
+        current = self.get_chat_settings(chat_id)
+        return self.set_chat_setting(chat_id, key, not getattr(current, key))
