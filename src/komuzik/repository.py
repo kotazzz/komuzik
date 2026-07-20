@@ -144,9 +144,8 @@ def format_download_history_line(row: dict) -> str:
 
 
 def format_user_label(user: dict) -> str:
-    """Format a user dict for admin list rows and buttons."""
-    user_id = user.get("id") if user.get("id") is not None else user.get("user_id")
-    username = user.get("username")
+    """Format a user for admin list/buttons (no raw id — use 'аноним')."""
+    username = (user.get("username") or "").strip().lstrip("@") or None
     display_name = (user.get("display_name") or "").strip() or None
 
     if display_name and username:
@@ -154,8 +153,8 @@ def format_user_label(user: dict) -> str:
     if display_name:
         return display_name
     if username:
-        return f"— (@{username})"
-    return str(user_id)
+        return f"@{username}"
+    return "аноним"
 
 
 class StatsRepository:

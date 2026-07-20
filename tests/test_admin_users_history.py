@@ -161,5 +161,6 @@ def test_format_user_label():
     assert format_user_label({"id": 1, "display_name": "Alice A", "username": "alice"}) == (
         "Alice A (@alice)"
     )
-    assert format_user_label({"id": 2, "username": "bob"}) == "— (@bob)"
-    assert format_user_label({"id": 3}) == "3"
+    assert format_user_label({"id": 2, "username": "bob"}) == "@bob"
+    assert format_user_label({"id": 3}) == "аноним"
+    assert format_user_label({"id": 4, "display_name": "Only Name"}) == "Only Name"

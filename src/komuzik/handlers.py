@@ -1983,8 +1983,7 @@ class BotHandlers:
         end = offset + len(users)
         lines = [f"👥 **Пользователи** ({offset + 1}–{end} из {total})\n"]
         for user in users:
-            label = format_user_label(user)
-            lines.append(f"• {label} · {self._admin_user_profile_link(user['id'])}")
+            lines.append(f"• {format_user_label(user)}")
 
         buttons: list[list] = []
         for user in users:
@@ -2024,7 +2023,8 @@ class BotHandlers:
         lines = [
             "📥 **История загрузок**\n",
             f"👤 {format_user_label(user_record)}",
-            f"ID: `{target_user_id}` · {self._admin_user_profile_link(target_user_id)}",
+            f"ID: `{target_user_id}`",
+            self._admin_user_profile_link(target_user_id),
         ]
 
         ban_reason = self.stats.get_ban(target_user_id)
