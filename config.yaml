@@ -119,6 +119,12 @@ messages:
 
     Для получения помощи используйте команду /help.
 
+    Используя бота, вы соглашаетесь с [правилами использования](https://telegra.ph/Pravila-polzovaniya-i-politika-konfidencialnosti-bota-Komuzik-07-20).
+
+  privacy: |
+    📄 Правила пользования и политика конфиденциальности:
+    https://telegra.ph/Pravila-polzovaniya-i-politika-konfidencialnosti-bota-Komuzik-07-20
+
   help: |
     🔍 **Как пользоваться ботом:**
 
@@ -138,6 +144,7 @@ messages:
     📌 **Доступные команды:**
     /start - Запустить бота
     /help - Показать справку
+    /privacy - Правила и политика конфиденциальности
     /settings - Подпись бота и название видео
     /search <запрос> - Поиск видео на YouTube
     /stats - Показать статистику бота

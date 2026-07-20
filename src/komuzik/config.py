@@ -109,6 +109,10 @@ PINTEREST_ERROR_MESSAGE = PINTEREST_SETTINGS.get(
 # ============= Bot Messages =============
 MESSAGES = _config.get_section("messages")
 
+PRIVACY_URL = (
+    "https://telegra.ph/Pravila-polzovaniya-i-politika-konfidencialnosti-bota-Komuzik-07-20"
+)
+
 MSG_START = MESSAGES.get(
     "start",
     "👋 Привет! Я бот для скачивания видео и музыки с YouTube, TikTok, Twitter/X и Pinterest.\n\n"
@@ -116,7 +120,8 @@ MSG_START = MESSAGES.get(
     "🎵 **TikTok**: автоматическая загрузка видео\n\n"
     "Просто отправьте мне ссылку на видео!\n\n"
     "💬 В любом чате: @bot ссылка. YouTube: music или 480 + ссылка.\n"
-    "Сначала напишите боту /start в ЛС.",
+    "Сначала напишите боту /start в ЛС.\n\n"
+    f"Используя бота, вы соглашаетесь с [правилами использования]({PRIVACY_URL}).",
 )
 
 MSG_HELP = MESSAGES.get(
@@ -126,7 +131,8 @@ MSG_HELP = MESSAGES.get(
     "2. /search <запрос> - поиск видео на YouTube\n"
     "3. /settings - подпись бота и название видео\n"
     "4. /report - отправить报告 о проблеме\n"
-    "5. /stats - статистика бота\n\n"
+    "5. /stats - статистика бота\n"
+    "6. /privacy - правила и политика конфиденциальности\n\n"
     "💬 **Inline:** @bot ссылка; YouTube: music / 360|480|720|1080 + ссылка\n"
     "Сначала /start в ЛС.\n\n"
     "📌 **Поддерживаемые платформы:**\n"
@@ -135,4 +141,9 @@ MSG_HELP = MESSAGES.get(
     "• TikTok (видео)\n"
     "• Twitter/X (видео, фото, альбомы)\n"
     "• Pinterest (видео и фото)",
+)
+
+MSG_PRIVACY = MESSAGES.get(
+    "privacy",
+    f"📄 Правила пользования и политика конфиденциальности:\n{PRIVACY_URL}",
 )

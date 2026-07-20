@@ -14,6 +14,7 @@ from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
     MSG_HELP,
+    MSG_PRIVACY,
     MSG_START,
     PINTEREST_REGEX,
     TIKTOK_REGEX,
@@ -128,6 +129,7 @@ class BotHandlers:
         """Register all event handlers."""
         self.client.on(events.NewMessage(pattern="/start"))(self.start_handler)
         self.client.on(events.NewMessage(pattern="/help"))(self.help_handler)
+        self.client.on(events.NewMessage(pattern="/privacy"))(self.privacy_handler)
         self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
         self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
         self.client.on(events.NewMessage(pattern="/post"))(self.post_handler)
@@ -314,7 +316,7 @@ class BotHandlers:
         ):
             return
         self._track_user(event)
-        await event.respond(MSG_START)
+        await event.respond(MSG_START, link_preview=False)
 
     async def help_handler(self, event: Message):
         """Handle /help command."""
@@ -325,6 +327,12 @@ class BotHandlers:
             return
         self._track_user(event)
         await event.respond(MSG_HELP)
+
+    async def privacy_handler(self, event: Message):
+        """Handle /privacy — send rules and privacy policy link."""
+        user_id, _ = self._get_user_info(event)
+        self._track_user(event)
+        await event.respond(MSG_PRIVACY, link_preview=False)
 
     async def _count_bot_groups(self) -> int:
         """Count groups/supergroups the bot is currently in."""
