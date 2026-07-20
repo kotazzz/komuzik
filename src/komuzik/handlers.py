@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 # States for /report command state machine
 REPORT_STATES = {}
+ADMIN_PENDING: dict[int, str] = {}
 PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
@@ -94,6 +95,19 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern=r"^/setstorage(?:@\w+)?"))(self.setstorage_handler)
         self.client.on(events.NewMessage(pattern=r"^/unsetstorage(?:@\w+)?"))(
             self.unsetstorage_handler
+        )
+        self.client.on(events.NewMessage(pattern=r"^/admin(?:@\w+)?"))(self.admin_handler)
+        self.client.on(events.NewMessage(pattern=r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?"))(
+            self.setconcurrent_handler
+        )
+        self.client.on(events.NewMessage(pattern=r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?"))(
+            self.setplaylistlimit_handler
+        )
+        self.client.on(events.NewMessage(pattern=r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?"))(
+            self.setuserlimit_handler
+        )
+        self.client.on(events.NewMessage(pattern=r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?"))(
+            self.unsetuserlimit_handler
         )
         self.client.on(events.NewMessage(pattern="/report"))(self.report_handler)
         self.client.on(events.NewMessage(pattern=r"^/search(?:\s+(.+))?"))(self.search_handler)
@@ -471,6 +485,9 @@ class BotHandlers:
 
         # Admin reply to a report → copy 1:1 to the reporter (quote their report)
         if await self._maybe_handle_report_reply(event, message_obj, user_id):
+            return
+
+        if await self._maybe_handle_admin_pending(event, message_obj, user_id):
             return
 
         # Check if user is in report state
@@ -1712,6 +1729,147 @@ class BotHandlers:
             logger.error(f"Error in post handler: {e}")
             await event.respond(f"Произошла ошибка: {e!s}")
 
+    def _is_bot_admin(self, user_id: int) -> bool:
+        return user_id in self.download_limiter.ADMIN_USER_IDS
+
+    def _parse_positive_int(self, text: str | None) -> int | None:
+        if text is None:
+            return None
+        raw = text.strip()
+        if not re.fullmatch(r"\d+", raw):
+            return None
+        value = int(raw)
+        if value < 1:
+            return None
+        return value
+
+    def _format_admin_panel(self) -> str:
+        concurrent = self.stats.get_max_concurrent(
+            default=self.download_limiter._yaml_concurrent
+        )
+        playlist_limit = self.stats.get_playlist_daily_limit()
+        return (
+            "🛠 **Админ-панель**\n\n"
+            f"Одновременных загрузок: **{concurrent}**\n"
+            f"Плейлист / сутки (глобально): **{playlist_limit}**\n\n"
+            "Персональный лимит: /setuserlimit <id> N\n"
+            "Сброс: /unsetuserlimit <id>"
+        )
+
+    def _admin_panel_buttons(self) -> list:
+        return [
+            [
+                Button.inline("⚙️ Concurrent", data="admin_set_concurrent"),
+                Button.inline("📺 Playlist limit", data="admin_set_playlist"),
+            ]
+        ]
+
+    async def admin_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        await event.respond(
+            self._format_admin_panel(),
+            buttons=self._admin_panel_buttons(),
+        )
+
+    async def setconcurrent_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None)
+        match = re.match(r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?", text or "")
+        n = self._parse_positive_int(match.group(1) if match else None)
+        if n is None:
+            await event.respond("Использование: /setconcurrent N (N ≥ 1)")
+            return
+        self.stats.set_max_concurrent(n)
+        _ = self.download_limiter.get_max_per_user()
+        await event.respond(f"✅ Одновременных загрузок: **{n}**")
+
+    async def setplaylistlimit_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None)
+        match = re.match(r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?", text or "")
+        n = self._parse_positive_int(match.group(1) if match else None)
+        if n is None:
+            await event.respond("Использование: /setplaylistlimit N (N ≥ 1)")
+            return
+        self.stats.set_playlist_daily_limit(n)
+        await event.respond(f"✅ Плейлист / сутки (глобально): **{n}**")
+
+    async def setuserlimit_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None)
+        match = re.match(r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?", text or "")
+        args = (match.group(1) or "").strip() if match else ""
+        parts = args.split()
+        if len(parts) != 2:
+            await event.respond("Использование: /setuserlimit <user_id> N (N ≥ 1)")
+            return
+        target_id = self._parse_positive_int(parts[0])
+        n = self._parse_positive_int(parts[1])
+        if target_id is None or n is None:
+            await event.respond("Использование: /setuserlimit <user_id> N (N ≥ 1)")
+            return
+        self.stats.set_user_playlist_limit(target_id, n)
+        limit = self.stats.get_user_playlist_limit(target_id)
+        await event.respond(f"✅ Персональный лимит для `{target_id}`: **{limit}**")
+
+    async def unsetuserlimit_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None)
+        match = re.match(r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?", text or "")
+        target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
+        if target_id is None:
+            await event.respond("Использование: /unsetuserlimit <user_id>")
+            return
+        self.stats.clear_user_playlist_limit(target_id)
+        await event.respond(f"✅ Персональный лимит для `{target_id}` сброшен.")
+
+    async def _maybe_handle_admin_pending(
+        self, event: Message, message_obj: Any, user_id: int
+    ) -> bool:
+        """Apply pending admin limit edit when admin sends a pure integer in DM."""
+        if not self._is_bot_admin(user_id):
+            return False
+        pending = ADMIN_PENDING.get(user_id)
+        if pending is None:
+            return False
+        if bool(getattr(event, "is_group", False)):
+            return False
+
+        text = getattr(message_obj, "text", None) if message_obj is not None else None
+        if not isinstance(text, str):
+            return False
+        stripped = text.strip()
+        if stripped.startswith("/"):
+            ADMIN_PENDING.pop(user_id, None)
+            return False
+        if not re.fullmatch(r"\d+", stripped):
+            return False
+
+        n = int(stripped)
+        if n < 1:
+            await event.respond("❌ N должно быть ≥ 1.")
+            return True
+
+        ADMIN_PENDING.pop(user_id, None)
+        if pending == "concurrent":
+            self.stats.set_max_concurrent(n)
+            _ = self.download_limiter.get_max_per_user()
+            await event.respond(f"✅ Одновременных загрузок: **{n}**")
+        elif pending == "playlist":
+            self.stats.set_playlist_daily_limit(n)
+            await event.respond(f"✅ Плейлист / сутки (глобально): **{n}**")
+        return True
+
     async def setstorage_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
         if user_id not in self.download_limiter.ADMIN_USER_IDS:
@@ -1821,6 +1979,16 @@ class BotHandlers:
 
         if data.startswith("pl_"):
             await self._handle_playlist_callback(event, data)
+            return
+
+        if data in {"admin_set_concurrent", "admin_set_playlist"}:
+            if user_id is None or not self._is_bot_admin(user_id):
+                await event.answer("Нет доступа.", alert=True)
+                return
+            ADMIN_PENDING[user_id] = "concurrent" if data == "admin_set_concurrent" else "playlist"
+            label = "concurrent" if data == "admin_set_concurrent" else "плейлист / сутки"
+            await event.answer()
+            await event.respond(f"Введите новое значение ({label}), целое число ≥ 1:")
             return
 
         # Route callbacks using dictionary
