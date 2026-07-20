@@ -532,6 +532,43 @@ class StatsRepository:
             logger.error(f"Failed to get reports: {e}")
             return []
 
+    def save_report_thread(
+        self,
+        admin_id: int,
+        header_msg_id: int,
+        body_msg_id: int,
+        user_id: int,
+        user_report_msg_id: int,
+    ) -> None:
+        """Link admin header/body report messages to the user's original report."""
+        try:
+            self.db.execute(
+                """INSERT INTO report_threads
+                   (admin_id, header_msg_id, body_msg_id, user_id, user_report_msg_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (admin_id, header_msg_id, body_msg_id, user_id, user_report_msg_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to save report thread for admin {admin_id}: {e}")
+
+    def get_report_thread_by_admin_msg(
+        self, admin_id: int, message_id: int
+    ) -> tuple[int, int] | None:
+        """Resolve admin report message to (user_id, user_report_msg_id)."""
+        try:
+            row = self.db.fetchone(
+                """SELECT user_id, user_report_msg_id FROM report_threads
+                   WHERE admin_id = ? AND (header_msg_id = ? OR body_msg_id = ?)
+                   ORDER BY id DESC LIMIT 1""",
+                (admin_id, message_id, message_id),
+            )
+            if not row:
+                return None
+            return int(row[0]), int(row[1])
+        except Exception as e:
+            logger.error(f"Failed to lookup report thread: {e}")
+            return None
+
     # === User settings ===
 
     def get_user_settings(self, user_id: int) -> UserSettings:

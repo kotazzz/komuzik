@@ -326,6 +326,10 @@ class BotHandlers:
         message_obj = event.message
         user_id, username = self._get_user_info(event)
 
+        # Admin reply to a report → copy 1:1 to the reporter (quote their report)
+        if await self._maybe_handle_report_reply(event, message_obj, user_id):
+            return
+
         # Check if user is in report state
         if REPORT_STATES.get(user_id):
             raw_report_text = (
@@ -345,14 +349,23 @@ class BotHandlers:
             db_text = report_text or "[Медиафайл]"
             self.stats.save_user_report(user_id, username, db_text)
 
-            # Send report to admins
-            header_msg = f"📋 **Новый отчет**\nОт: @{username or user_id} (ID: {user_id})"
+            # Send report to admins (header + 1:1 copy without "forwarded from")
+            header_text = f"📋 **Новый отчет**\nОт: @{username or user_id} (ID: {user_id})"
+            user_report_msg_id = int(message_obj.id) if message_obj is not None else 0
 
             for admin_id in self.download_limiter.ADMIN_USER_IDS:
                 try:
-                    await self.client.send_message(admin_id, header_msg)
-                    if message_obj is not None:
-                        await self.client.send_message(admin_id, message_obj)
+                    header = await self.client.send_message(admin_id, header_text)
+                    if message_obj is None:
+                        continue
+                    body = await self.client.send_message(admin_id, message_obj)
+                    self.stats.save_report_thread(
+                        admin_id=int(admin_id),
+                        header_msg_id=int(header.id),
+                        body_msg_id=int(body.id),
+                        user_id=user_id,
+                        user_report_msg_id=user_report_msg_id,
+                    )
                 except Exception as e:
                     logger.error(f"Failed to send report to admin {admin_id}: {e}")
 
@@ -898,6 +911,40 @@ class BotHandlers:
             "📝 Опишите проблему (или отправьте /cancel для отмены):",
             buttons=[[Button.inline("❌ Отмена", data="report_cancel")]],
         )
+
+    async def _maybe_handle_report_reply(
+        self, event: Message, message_obj: Any, user_id: int
+    ) -> bool:
+        """If admin replies to a report message, copy the reply to the reporter.
+
+        Returns True when the event was handled as a report reply.
+        """
+        if user_id not in self.download_limiter.ADMIN_USER_IDS:
+            return False
+        if message_obj is None:
+            return False
+
+        reply = getattr(message_obj, "reply_to", None)
+        reply_msg_id = getattr(reply, "reply_to_msg_id", None) if reply is not None else None
+        if not isinstance(reply_msg_id, int):
+            return False
+
+        thread = self.stats.get_report_thread_by_admin_msg(user_id, reply_msg_id)
+        if thread is None:
+            return False
+
+        reporter_id, user_report_msg_id = thread
+        try:
+            await self.client.send_message(
+                reporter_id,
+                message_obj,
+                reply_to=user_report_msg_id,
+            )
+            await event.respond("✅ Ответ отправлен пользователю.")
+        except Exception as e:
+            logger.error(f"Failed to deliver report reply to {reporter_id}: {e}")
+            await event.respond(f"❌ Не удалось отправить ответ: {e!s}")
+        return True
 
     async def callback_handler(self, event):
         """Handle callback queries from inline buttons."""

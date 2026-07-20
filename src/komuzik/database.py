@@ -89,6 +89,27 @@ class Database:
             )
         """)
 
+        # Links admin report messages to the original user report (for replies)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS report_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                header_msg_id INTEGER NOT NULL,
+                body_msg_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_report_msg_id INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_report_threads_admin_header
+            ON report_threads(admin_id, header_msg_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_report_threads_admin_body
+            ON report_threads(admin_id, body_msg_id)
+        """)
+
         # Per-user caption preferences (defaults: both enabled)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_settings (
