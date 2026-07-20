@@ -10,6 +10,12 @@ if [ ! -f "config.yaml" ]; then
 fi
 echo "✓ config.yaml найден"
 
+if [ ! -f "messages.yaml" ]; then
+    echo "❌ Ошибка: messages.yaml не найден!"
+    exit 1
+fi
+echo "✓ messages.yaml найден"
+
 # Проверка обязательных переменных окружения
 if [ -z "$API_ID" ] || [ -z "$API_HASH" ] || [ -z "$BOT_TOKEN" ]; then
     echo "❌ Ошибка: не установлены обязательные переменные окружения:"

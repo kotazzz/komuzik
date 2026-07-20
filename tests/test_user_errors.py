@@ -1,5 +1,5 @@
+from komuzik.i18n import t
 from komuzik.user_errors import (
-    MSG_DOWNLOAD_UNAVAILABLE,
     format_download_error,
     is_access_restricted_error,
 )
@@ -13,13 +13,13 @@ TIKTOK_ACCESS = (
 
 def test_tiktok_login_access_detected():
     assert is_access_restricted_error(TIKTOK_ACCESS)
-    assert format_download_error(TIKTOK_ACCESS) == MSG_DOWNLOAD_UNAVAILABLE
+    assert format_download_error(TIKTOK_ACCESS) == t("errors.download_unavailable")
 
 
 def test_youtube_http_403_detected():
     err = "ERROR: [youtube] abc: Unable to download webpage: HTTP Error 403: Forbidden"
     assert is_access_restricted_error(err)
-    assert format_download_error(err, context="Префикс:") == MSG_DOWNLOAD_UNAVAILABLE
+    assert format_download_error(err, context="Префикс:") == t("errors.download_unavailable")
 
 
 def test_youtube_http_401_detected():

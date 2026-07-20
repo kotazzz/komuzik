@@ -17,14 +17,9 @@ from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
 
 from .captions import build_media_caption
 from .config import DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH
+from .i18n import t
 
 logger = logging.getLogger(__name__)
-
-PM_UNAVAILABLE_MESSAGE = (
-    "❌ Не могу отправить файл в ваш ЛС.\n\n"
-    "Откройте бота и нажмите /start (или уберите бота из чёрного списка), "
-    "затем повторите inline-запрос."
-)
 
 INLINE_PM_ERRORS = (
     UserIsBlockedError,
@@ -35,6 +30,14 @@ INLINE_PM_ERRORS = (
     ValueError,
     TypeError,
 )
+
+
+def pm_unavailable_message() -> str:
+    return t("errors.pm_unavailable")
+
+
+# Back-compat for imports that expect a constant (evaluated at call sites via property-like use).
+PM_UNAVAILABLE_MESSAGE = t("errors.pm_unavailable")
 
 
 async def stage_media_to_user(

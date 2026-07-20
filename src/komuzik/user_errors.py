@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import re
 
-MSG_DOWNLOAD_UNAVAILABLE = (
-    "❌ Не удалось скачать это видео.\n"
-    "Возможно, оно недоступно, ограничено по возрасту или требует входа."
-)
+from .i18n import t
 
 # Substrings that mean login / age-gate / cookies rather than a bot bug.
 _ACCESS_MARKERS = (
@@ -53,7 +50,7 @@ def format_download_error(error: BaseException | str, *, context: str | None = N
     Other errors keep optional ``context`` prefix plus the original text.
     """
     if is_access_restricted_error(error):
-        return MSG_DOWNLOAD_UNAVAILABLE
+        return t("errors.download_unavailable")
     detail = str(error)
     if context:
         return f"{context}\n{detail}"

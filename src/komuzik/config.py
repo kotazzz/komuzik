@@ -6,6 +6,7 @@ import re
 from dotenv import load_dotenv
 
 from .config_loader import ConfigLoader
+from .i18n import t
 
 # Load environment variables
 load_dotenv()
@@ -81,69 +82,27 @@ TIKTOK_SETTINGS = _config.get_section("tiktok")
 
 TIKTOK_MAX_RETRIES = TIKTOK_SETTINGS.get("max_retries", 3)
 TIKTOK_RETRY_BACKOFF = TIKTOK_SETTINGS.get("retry_backoff_base", 2)
-TIKTOK_ERROR_MESSAGE = TIKTOK_SETTINGS.get(
-    "error_message",
-    "Не удается загрузить видео с TikTok. Пожалуйста, проверьте ссылку и попробуйте позже.",
-)
 
 # ============= Twitter/X Settings =============
 TWITTER_SETTINGS = _config.get_section("twitter")
 
 TWITTER_MAX_RETRIES = TWITTER_SETTINGS.get("max_retries", 3)
 TWITTER_RETRY_BACKOFF = TWITTER_SETTINGS.get("retry_backoff_base", 2)
-TWITTER_ERROR_MESSAGE = TWITTER_SETTINGS.get(
-    "error_message",
-    "Не удается загрузить видео с Twitter/X. Пожалуйста, проверьте ссылку и попробуйте позже.",
-)
 
 # ============= Pinterest Settings =============
 PINTEREST_SETTINGS = _config.get_section("pinterest")
 
 PINTEREST_MAX_RETRIES = PINTEREST_SETTINGS.get("max_retries", 3)
 PINTEREST_RETRY_BACKOFF = PINTEREST_SETTINGS.get("retry_backoff_base", 2)
-PINTEREST_ERROR_MESSAGE = PINTEREST_SETTINGS.get(
-    "error_message",
-    "Не удается загрузить медиа с Pinterest. Пожалуйста, проверьте ссылку и попробуйте позже.",
-)
 
-# ============= Bot Messages =============
-MESSAGES = _config.get_section("messages")
-
+# ============= Bot Messages (messages.yaml via t) =============
 PRIVACY_URL = (
     "https://telegra.ph/Pravila-polzovaniya-i-politika-konfidencialnosti-bota-Komuzik-07-20"
 )
 
-MSG_START = MESSAGES.get(
-    "start",
-    "👋 Привет! Я бот для скачивания видео и музыки с YouTube, TikTok, Twitter/X и Pinterest.\n\n"
-    "📺 **YouTube**: выбирайте качество видео и аудио\n"
-    "🎵 **TikTok**: автоматическая загрузка видео\n\n"
-    "Просто отправьте мне ссылку на видео!\n\n"
-    "💬 В любом чате: @bot ссылка. YouTube: music или 480 + ссылка.\n"
-    "Сначала напишите боту /start в ЛС.\n\n"
-    f"Используя бота, вы соглашаетесь с [правилами использования]({PRIVACY_URL}).",
-)
+MSG_START = t("start")
+MSG_PRIVACY = t("privacy")
+TIKTOK_ERROR_MESSAGE = t("errors.tiktok")
+TWITTER_ERROR_MESSAGE = t("errors.twitter")
+PINTEREST_ERROR_MESSAGE = t("errors.pinterest")
 
-MSG_HELP = MESSAGES.get(
-    "help",
-    "🔍 **Как пользоваться ботом:**\n\n"
-    "1. Отправьте ссылку на видео с YouTube, YouTube Shorts, TikTok, Twitter/X или Pinterest\n"
-    "2. /search <запрос> - поиск видео на YouTube\n"
-    "3. /settings - подпись бота и название видео\n"
-    "4. /report - отправить报告 о проблеме\n"
-    "5. /stats - статистика бота\n"
-    "6. /privacy - правила и политика конфиденциальности\n\n"
-    "💬 **Inline:** @bot ссылка; YouTube: music / 360|480|720|1080 + ссылка\n"
-    "Сначала /start в ЛС.\n\n"
-    "📌 **Поддерживаемые платформы:**\n"
-    "• YouTube (видео и аудио, выбор качества)\n"
-    "• YouTube Shorts (видео)\n"
-    "• TikTok (видео)\n"
-    "• Twitter/X (видео, фото, альбомы)\n"
-    "• Pinterest (видео и фото)",
-)
-
-MSG_PRIVACY = MESSAGES.get(
-    "privacy",
-    f"📄 Правила пользования и политика конфиденциальности:\n{PRIVACY_URL}",
-)

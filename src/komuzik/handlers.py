@@ -48,6 +48,7 @@ from .help_pages import (
     user_toc_buttons,
     user_toc_text,
 )
+from .i18n import t
 from .inline_media import (
     PM_UNAVAILABLE_MESSAGE,
     delete_staging_message,
@@ -356,7 +357,7 @@ class BotHandlers:
         self._track_user(event)
         await event.respond(
             INFO_TEXT,
-            buttons=[[Button.url("Исходный код", INFO_GITHUB_URL)]],
+            buttons=[[Button.url(t("info.button_source"), INFO_GITHUB_URL)]],
             link_preview=False,
         )
 
@@ -367,7 +368,7 @@ class BotHandlers:
         is_admin = bool(user_id and self._is_bot_admin(user_id))
 
         if kind in {"admin_toc", "admin_page"} and not is_admin:
-            await event.answer("Нет доступа.", alert=True)
+            await event.answer(t("errors.no_access"), alert=True)
             return
 
         try:

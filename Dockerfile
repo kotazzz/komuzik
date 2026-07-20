@@ -35,6 +35,7 @@ RUN uv sync --frozen
 # Copy application code
 COPY src/ ./src/
 COPY config.yaml .
+COPY messages.yaml .
 
 # Copy entrypoint script
 COPY entrypoint.sh .
