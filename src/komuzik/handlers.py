@@ -44,6 +44,7 @@ from .inline_media import (
 )
 from .inline_query import ParsedInlineQuery, parse_inline_query
 from .repository import StatsRepository
+from .stats_infographic import get_stats_image
 
 logger = logging.getLogger(__name__)
 
@@ -678,63 +679,28 @@ class BotHandlers:
         )
 
     async def _handle_stats_callback(self, event, data: str):
-        """Handle statistics view callback."""
+        """Handle statistics view callback — send infographic image."""
         period = data.split("_")[1]  # Extract period (day, month, all)
 
-        await event.answer("Загрузка статистики...")
+        await event.answer("Рисую инфографику...")
 
         try:
             stats = self.stats.get_statistics(period)
-
-            # Format period name in Russian
-            period_names = {"day": "за день", "month": "за месяц", "all": "за все время"}
+            period_names = {"day": "за день", "month": "за месяц", "all": "за всё время"}
             period_name = period_names.get(period, period)
 
-            # Build statistics message
-            message = f"📊 Статистика бота Komuzik {period_name}\n\n"
+            image_path = await get_stats_image(stats, period)
 
-            message += f"👥 Пользователей: {stats['total_users']}\n"
-            message += f"🔍 Поисков: {stats['total_searches']}\n\n"
+            total = int(stats.get("total_downloads") or 0)
+            ok = int(stats.get("successful_downloads") or 0)
+            success_pct = round(100 * ok / total) if total else 0
+            caption = (
+                f"📊 Komuzik {period_name}\n"
+                f"👥 {stats.get('total_users', 0)} · "
+                f"📥 {total} · "
+                f"✅ {success_pct}%"
+            )
 
-            message += f"📥 Всего загрузок: {stats['total_downloads']}\n"
-            message += f"  ✅ Успешных: {stats['successful_downloads']}\n"
-            message += f"  ❌ Ошибок: {stats['failed_downloads']}\n\n"
-
-            message += f"🎬 Видео (YouTube): {stats['total_videos']}\n"
-            message += f"🎵 Аудио: {stats['total_audio']}\n"
-            message += f"📱 TikTok: {stats['total_tiktoks']}\n"
-            message += f"📌 Pinterest: {stats['total_pinterest']}\n\n"
-
-            by_source = stats.get("by_source") or {}
-            by_content = stats.get("by_content") or {}
-            source_total = max(by_source.get("dm", 0) + by_source.get("inline", 0), 1)
-            content_total = max(by_content.get("video", 0) + by_content.get("audio", 0), 1)
-            dm_pct = round(100 * by_source.get("dm", 0) / source_total)
-            inline_pct = round(100 * by_source.get("inline", 0) / source_total)
-            video_pct = round(100 * by_content.get("video", 0) / content_total)
-            audio_pct = round(100 * by_content.get("audio", 0) / content_total)
-
-            message += "📡 Источник загрузок:\n"
-            message += f"  • ЛС (dm): {by_source.get('dm', 0)} ({dm_pct}%)\n"
-            message += f"  • Inline: {by_source.get('inline', 0)} ({inline_pct}%)\n\n"
-            message += "🎛 Тип контента:\n"
-            message += f"  • Видео/медиа: {by_content.get('video', 0)} ({video_pct}%)\n"
-            message += f"  • Аудио: {by_content.get('audio', 0)} ({audio_pct}%)\n\n"
-
-            # Popular video formats
-            if stats["popular_video_formats"]:
-                message += "📊 Популярные форматы видео:\n"
-                for format_name, count in stats["popular_video_formats"]:
-                    message += f"  • {format_name}: {count}\n"
-                message += "\n"
-
-            # Popular audio formats
-            if stats["popular_audio_formats"]:
-                message += "🎧 Популярные форматы аудио:\n"
-                for format_name, count in stats["popular_audio_formats"]:
-                    message += f"  • {format_name}: {count}\n"
-
-            # Add buttons to switch periods
             buttons = [
                 [
                     Button.inline("📊 За день", data="stats_day"),
@@ -743,7 +709,15 @@ class BotHandlers:
                 [Button.inline("📈 За все время", data="stats_all")],
             ]
 
-            await event.edit(message, buttons=buttons)
+            # Prefer editing current message into a photo; fall back to new message.
+            try:
+                await event.edit(caption, file=str(image_path), buttons=buttons)
+            except Exception:
+                await event.respond(caption, file=str(image_path), buttons=buttons)
+                try:
+                    await event.delete()
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")

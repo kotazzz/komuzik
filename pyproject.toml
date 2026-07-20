@@ -7,6 +7,7 @@ requires-python = ">=3.10,<4.0"
 readme = "README.md"
 dependencies = [
     "gallery-dl>=1.31.10",
+    "pillow>=12.3.0",
     "pyrogram>=2.0.106",
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
