@@ -66,6 +66,8 @@ ADMIN_PENDING: dict[int, str] = {}
 ADMIN_USERS_PAGE_SIZE = 15
 ADMIN_HISTORY_PAGE_SIZE = 10
 ADMIN_HISTORY_MAX = 50
+ADMIN_USERS_KIND_KNOWN = "known"
+ADMIN_USERS_KIND_ANON = "anon"
 PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
@@ -1961,7 +1963,7 @@ class BotHandlers:
                 Button.inline("⚙️ Concurrent", data="admin_set_concurrent"),
                 Button.inline("📺 Playlist limit", data="admin_set_playlist"),
             ],
-            [Button.inline("👥 Пользователи", data="admin_users_p_0")],
+            [Button.inline("👥 Пользователи", data="admin_users_known_p_0")],
         ]
 
     def _admin_user_profile_link(self, user_id: int) -> str:
@@ -1972,29 +1974,54 @@ class BotHandlers:
             return label
         return label[: max_len - 3] + "..."
 
-    def _format_admin_users_page(self, page: int) -> tuple[str, list]:
+    def _format_admin_users_page(
+        self, page: int, *, kind: str = ADMIN_USERS_KIND_KNOWN
+    ) -> tuple[str, list]:
+        if kind not in {ADMIN_USERS_KIND_KNOWN, ADMIN_USERS_KIND_ANON}:
+            kind = ADMIN_USERS_KIND_KNOWN
+
         offset = page * ADMIN_USERS_PAGE_SIZE
-        users = self.stats.list_users(offset=offset, limit=ADMIN_USERS_PAGE_SIZE)
-        total = self.stats.count_users()
+        users = self.stats.list_users(offset=offset, limit=ADMIN_USERS_PAGE_SIZE, kind=kind)
+        total = self.stats.count_users(kind=kind)
+        known_total = self.stats.count_users(kind=ADMIN_USERS_KIND_KNOWN)
+        anon_total = self.stats.count_users(kind=ADMIN_USERS_KIND_ANON)
 
+        tab_title = "Известные" if kind == ADMIN_USERS_KIND_KNOWN else "Анонимы"
         if total == 0:
-            return "👥 **Пользователи**\n\nСписок пуст.", []
+            lines = [
+                f"👥 **Пользователи → {tab_title}**\n",
+                "Список пуст.",
+            ]
+        else:
+            end = offset + len(users)
+            lines = [f"👥 **Пользователи → {tab_title}** ({offset + 1}–{end} из {total})\n"]
+            for user in users:
+                lines.append(f"• {format_user_label(user)}")
 
-        end = offset + len(users)
-        lines = [f"👥 **Пользователи** ({offset + 1}–{end} из {total})\n"]
-        for user in users:
-            lines.append(f"• {format_user_label(user)}")
+        known_mark = "✅ " if kind == ADMIN_USERS_KIND_KNOWN else ""
+        anon_mark = "✅ " if kind == ADMIN_USERS_KIND_ANON else ""
+        buttons: list[list] = [
+            [
+                Button.inline(
+                    f"{known_mark}Известные ({known_total})",
+                    data="admin_users_known_p_0",
+                ),
+                Button.inline(
+                    f"{anon_mark}Анонимы ({anon_total})",
+                    data="admin_users_anon_p_0",
+                ),
+            ]
+        ]
 
-        buttons: list[list] = []
         for user in users:
             btn_label = self._truncate_button_label(format_user_label(user))
             buttons.append([Button.inline(btn_label, data=f"admin_user_{user['id']}")])
 
         nav: list = []
         if page > 0:
-            nav.append(Button.inline("◀️", data=f"admin_users_p_{page - 1}"))
-        if end < total:
-            nav.append(Button.inline("▶️", data=f"admin_users_p_{page + 1}"))
+            nav.append(Button.inline("◀️", data=f"admin_users_{kind}_p_{page - 1}"))
+        if total > 0 and (offset + len(users)) < total:
+            nav.append(Button.inline("▶️", data=f"admin_users_{kind}_p_{page + 1}"))
         if nav:
             buttons.append(nav)
 
@@ -2020,6 +2047,11 @@ class BotHandlers:
         )
 
         user_record = user or {"id": target_user_id}
+        back_kind = (
+            ADMIN_USERS_KIND_ANON
+            if format_user_label(user_record) == "аноним"
+            else ADMIN_USERS_KIND_KNOWN
+        )
         lines = [
             "📥 **История загрузок**\n",
             f"👤 {format_user_label(user_record)}",
@@ -2049,12 +2081,16 @@ class BotHandlers:
             )
         if nav:
             buttons.append(nav)
-        buttons.append([Button.inline("← К списку", data="admin_users_p_0")])
+        buttons.append(
+            [Button.inline("← К списку", data=f"admin_users_{back_kind}_p_0")]
+        )
 
         return "\n".join(lines), buttons
 
-    async def _send_admin_users_page(self, event, page: int, *, edit: bool = False) -> None:
-        text, buttons = self._format_admin_users_page(page)
+    async def _send_admin_users_page(
+        self, event, page: int, *, kind: str = ADMIN_USERS_KIND_KNOWN, edit: bool = False
+    ) -> None:
+        text, buttons = self._format_admin_users_page(page, kind=kind)
         kwargs: dict[str, Any] = {"link_preview": False}
         if buttons:
             kwargs["buttons"] = buttons
@@ -2082,7 +2118,7 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        await self._send_admin_users_page(event, 0)
+        await self._send_admin_users_page(event, 0, kind=ADMIN_USERS_KIND_KNOWN)
 
     async def user_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -2365,12 +2401,19 @@ class BotHandlers:
             await event.respond(f"Введите новое значение ({label}), целое число ≥ 1:")
             return
 
-        if data.startswith("admin_users_p_"):
+        users_page_match = re.fullmatch(r"admin_users_(known|anon)_p_(\d+)", data)
+        if users_page_match or data.startswith("admin_users_p_"):
             if user_id is None or not self._is_bot_admin(user_id):
                 await event.answer("Нет доступа.", alert=True)
                 return
-            page = int(data.removeprefix("admin_users_p_"))
-            text, buttons = self._format_admin_users_page(page)
+            if users_page_match:
+                kind = users_page_match.group(1)
+                page = int(users_page_match.group(2))
+            else:
+                # legacy callback from older messages
+                kind = ADMIN_USERS_KIND_KNOWN
+                page = int(data.removeprefix("admin_users_p_"))
+            text, buttons = self._format_admin_users_page(page, kind=kind)
             kwargs: dict[str, Any] = {"link_preview": False}
             if buttons:
                 kwargs["buttons"] = buttons

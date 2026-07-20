@@ -669,12 +669,19 @@ class StatsRepository:
             logger.error(f"Failed to get all users: {e}")
             return []
 
-    def list_users(self, offset: int = 0, limit: int = 15) -> list[dict]:
-        """Return users sorted by last_seen DESC with pagination."""
+    def list_users(
+        self, offset: int = 0, limit: int = 15, *, kind: str = "all"
+    ) -> list[dict]:
+        """Return users sorted by last_seen DESC with pagination.
+
+        kind: ``all`` | ``known`` (username or display_name) | ``anonymous`` (neither).
+        """
+        where = self._users_kind_where(kind)
         try:
             rows = self.db.fetchall(
-                """SELECT user_id, username, display_name, last_seen
+                f"""SELECT user_id, username, display_name, last_seen
                    FROM users
+                   WHERE {where}
                    ORDER BY last_seen DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
@@ -689,17 +696,33 @@ class StatsRepository:
                 for row in rows or []
             ]
         except Exception as e:
-            logger.error(f"Failed to list users: {e}")
+            logger.error(f"Failed to list users (kind={kind}): {e}")
             return []
 
-    def count_users(self) -> int:
-        """Return total number of tracked users."""
+    def count_users(self, *, kind: str = "all") -> int:
+        """Return number of tracked users, optionally filtered by kind."""
+        where = self._users_kind_where(kind)
         try:
-            row = self.db.fetchone("SELECT COUNT(*) FROM users")
+            row = self.db.fetchone(f"SELECT COUNT(*) FROM users WHERE {where}")
             return int(row[0]) if row else 0
         except Exception as e:
-            logger.error(f"Failed to count users: {e}")
+            logger.error(f"Failed to count users (kind={kind}): {e}")
             return 0
+
+    @staticmethod
+    def _users_kind_where(kind: str) -> str:
+        known = (
+            "("
+            "(username IS NOT NULL AND TRIM(username) != '')"
+            " OR "
+            "(display_name IS NOT NULL AND TRIM(display_name) != '')"
+            ")"
+        )
+        if kind == "known":
+            return known
+        if kind in {"anonymous", "anon"}:
+            return f"NOT {known}"
+        return "1=1"
 
     def get_user(self, user_id: int) -> dict | None:
         """Return one user row by id, or None."""

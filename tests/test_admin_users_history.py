@@ -21,8 +21,30 @@ def test_list_users_empty():
     try:
         assert repo.list_users() == []
         assert repo.count_users() == 0
+        assert repo.count_users(kind="known") == 0
+        assert repo.count_users(kind="anonymous") == 0
         assert repo.list_user_downloads(1) == []
         assert repo.count_user_downloads(1) == 0
+    finally:
+        db.close()
+
+
+def test_list_users_splits_known_and_anonymous():
+    db, repo = _repo()
+    try:
+        repo.track_user(1, "alice", display_name="Alice")
+        repo.track_user(2, "bob", display_name=None)
+        repo.track_user(3, None, display_name=None)
+        repo.track_user(4, "", display_name="  ")
+
+        assert repo.count_users() == 4
+        assert repo.count_users(kind="known") == 2
+        assert repo.count_users(kind="anonymous") == 2
+
+        known_ids = {u["id"] for u in repo.list_users(kind="known", limit=10)}
+        anon_ids = {u["id"] for u in repo.list_users(kind="anonymous", limit=10)}
+        assert known_ids == {1, 2}
+        assert anon_ids == {3, 4}
     finally:
         db.close()
 
