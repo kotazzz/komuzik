@@ -1,5 +1,6 @@
 """Event handlers for Telegram bot commands and callbacks."""
 
+import asyncio
 import logging
 import os
 import re
@@ -37,6 +38,7 @@ from .downloaders import (
     send_image_content,
     send_playlist_album,
     send_video_content,
+    youtube_thumbnail_url,
 )
 from .help_pages import (
     INFO_GITHUB_URL,
@@ -92,6 +94,7 @@ PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
 SEARCH_SESSIONS: dict[str, dict[str, Any]] = {}
+INLINE_SEARCH_MAX = 8  # keep under Telegram inline answer deadline
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -2858,6 +2861,49 @@ class BotHandlers:
         )
         await event.answer("Сохранено")
 
+    def _youtube_id_from_url(self, url: str) -> str | None:
+        match = YOUTUBE_REGEX.search(url)
+        if not match:
+            return None
+        # last capturing group in YOUTUBE_REGEX is the 11-char id
+        for group in reversed(match.groups()):
+            if isinstance(group, str) and re.fullmatch(r"[\w-]{11}", group):
+                return group
+        return None
+
+    def _inline_thumb_url(self, *, video_id: str | None = None, fallback: str | None = None) -> str | None:
+        """Prefer stable i.ytimg.com/hqdefault — signed hq720 URLs often break Telegram thumbs."""
+        stable = youtube_thumbnail_url(video_id)
+        if stable:
+            return stable
+        if isinstance(fallback, str) and fallback.startswith("http"):
+            return fallback.split("?", 1)[0]
+        return None
+
+    async def _answer_inline_articles(
+        self, event, articles: list, *, gallery: bool = False
+    ) -> None:
+        """Answer inline query; retry without gallery/thumbs if Telegram rejects."""
+        try:
+            await event.answer(articles, cache_time=0, gallery=gallery)
+            return
+        except Exception as e:
+            logger.warning(f"Inline answer failed (gallery={gallery}): {e}")
+        try:
+            await event.answer(articles, cache_time=0, gallery=False)
+            return
+        except Exception as e:
+            logger.warning(f"Inline answer retry without gallery failed: {e}")
+        # Last resort: rebuild without thumbs is hard here; send a single hint
+        builder = event.builder
+        hint = await builder.article(
+            title="Не удалось показать результаты",
+            description="Попробуйте ещё раз или откройте /search в ЛС",
+            text="Inline-выдача временно недоступна. Напишите боту /search в личке.",
+            id="inline_fail",
+        )
+        await event.answer([hint], cache_time=0)
+
     async def inline_query_handler(self, event):
         """Answer inline queries: URL download or YouTube text search."""
         query_text = event.text or ""
@@ -2886,9 +2932,26 @@ class BotHandlers:
         builder = event.builder
 
         if parsed:
-            title, thumb_url = await get_media_preview(parsed.url, fallback=parsed.description)
             token = uuid.uuid4().hex[:16]
             INLINE_JOBS[token] = parsed
+            # Fast path: stable thumb from id; title with short timeout
+            video_id = self._youtube_id_from_url(parsed.url)
+            thumb_url = self._inline_thumb_url(video_id=video_id)
+            title = parsed.description
+            try:
+                title, preview_thumb = await asyncio.wait_for(
+                    get_media_preview(parsed.url, fallback=parsed.description),
+                    timeout=2.5,
+                )
+                if not thumb_url:
+                    thumb_url = self._inline_thumb_url(
+                        video_id=video_id, fallback=preview_thumb
+                    )
+            except TimeoutError:
+                logger.info(f"Inline preview timeout for {parsed.url}")
+            except Exception as e:
+                logger.warning(f"Inline preview failed for {parsed.url}: {e}")
+
             thumb = input_web_thumb(thumb_url) if thumb_url else None
             result = await builder.article(
                 title=title,
@@ -2898,7 +2961,7 @@ class BotHandlers:
                 id=token,
                 thumb=thumb,
             )
-            await event.answer([result], cache_time=0)
+            await self._answer_inline_articles(event, [result], gallery=False)
             return
 
         query = query_text.strip()
@@ -2921,7 +2984,23 @@ class BotHandlers:
             self.stats.track_user(user_id, username)
             self.stats.track_search(user_id, username)
 
-        results = await search_youtube(query, max_results=DEFAULT_SEARCH_RESULTS)
+        try:
+            results = await asyncio.wait_for(
+                search_youtube(query, max_results=INLINE_SEARCH_MAX),
+                timeout=4.0,
+            )
+        except TimeoutError:
+            logger.warning(f"Inline search timed out for query={query!r}")
+            slow = await builder.article(
+                title="Поиск слишком долгий",
+                description="Откройте /search в личке с ботом",
+                text="YouTube отвечает медленно. Используйте /search в ЛС или повторите запрос.",
+                buttons=[Button.inline("⏳", b"noop")],
+                id="search_timeout",
+            )
+            await event.answer([slow], cache_time=0)
+            return
+
         if not results:
             empty = await builder.article(
                 title="Ничего не найдено",
@@ -2954,8 +3033,12 @@ class BotHandlers:
             if len(description) > 64:
                 description = description[:61] + "..."
 
-            thumb_url = item.get("thumbnail")
-            thumb = input_web_thumb(str(thumb_url)) if isinstance(thumb_url, str) and thumb_url else None
+            vid = item.get("id") if isinstance(item.get("id"), str) else None
+            thumb_url = self._inline_thumb_url(
+                video_id=vid,
+                fallback=item.get("thumbnail") if isinstance(item.get("thumbnail"), str) else None,
+            )
+            thumb = input_web_thumb(thumb_url) if thumb_url else None
 
             articles.append(
                 await builder.article(
@@ -2979,7 +3062,7 @@ class BotHandlers:
             await event.answer([empty], cache_time=0)
             return
 
-        await event.answer(articles, cache_time=0, gallery=True)
+        await self._answer_inline_articles(event, articles, gallery=True)
 
     async def chosen_inline_handler(self, event: UpdateBotInlineSend):
         """Download media after user picks an inline result and edit the via-message."""
