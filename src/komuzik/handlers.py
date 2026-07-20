@@ -90,6 +90,10 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
         self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
         self.client.on(events.NewMessage(pattern="/post"))(self.post_handler)
+        self.client.on(events.NewMessage(pattern=r"^/setstorage(?:@\w+)?"))(self.setstorage_handler)
+        self.client.on(events.NewMessage(pattern=r"^/unsetstorage(?:@\w+)?"))(
+            self.unsetstorage_handler
+        )
         self.client.on(events.NewMessage(pattern="/report"))(self.report_handler)
         self.client.on(events.NewMessage(pattern=r"^/search(?:\s+(.+))?"))(self.search_handler)
         self.client.on(events.NewMessage())(self.message_handler)
@@ -1609,6 +1613,37 @@ class BotHandlers:
         except Exception as e:
             logger.error(f"Error in post handler: {e}")
             await event.respond(f"Произошла ошибка: {e!s}")
+
+    async def setstorage_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if user_id not in self.download_limiter.ADMIN_USER_IDS:
+            return
+        if not event.is_group:
+            await event.respond("⚠️ Команду нужно вызвать в группе-хранилище.")
+            return
+        chat_id = event.chat_id
+        probe = await event.respond("⏳ Проверяю права…")
+        try:
+            await self.client.delete_messages(chat_id, [probe.id])
+        except Exception as e:
+            await event.respond(
+                f"❌ Не могу удалять сообщения в этой группе ({e!s}). "
+                "Дай боту право удалять сообщения и повтори /setstorage."
+            )
+            return
+        self.stats.set_storage_chat_id(int(chat_id))
+        await event.respond(f"✅ Эта группа — хранилище бота.\nchat_id=`{chat_id}`")
+
+    async def unsetstorage_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if user_id not in self.download_limiter.ADMIN_USER_IDS:
+            return
+        prev = self.stats.get_storage_chat_id()
+        self.stats.clear_storage_chat_id()
+        if prev is None:
+            await event.respond("ℹ️ Хранилище и так не задано.")
+        else:
+            await event.respond(f"✅ Хранилище сброшено (было `{prev}`).")
 
     async def report_handler(self, event: Message):
         """Handle /report command for user reports."""
