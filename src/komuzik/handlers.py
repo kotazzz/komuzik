@@ -383,6 +383,11 @@ class BotHandlers:
         if text.startswith("/"):
             return
 
+        # Groups/supergroups: auto-download links (silent if no URL)
+        if bool(getattr(event, "is_group", False)):
+            await self._handle_group_link_message(event, text)
+            return
+
         self._track_user(event)
 
         # Check for Twitter/X
@@ -418,6 +423,91 @@ class BotHandlers:
             await self._handle_youtube_shorts(event, matched_url)
         else:
             await self._show_content_type_selection(event, matched_url)
+
+    async def _handle_group_link_message(self, event: Message, text: str) -> None:
+        """Auto-download a supported link in a group (reply to the link message)."""
+        if bool(getattr(event, "out", False)):
+            return
+
+        parsed = parse_inline_query(text)
+        if parsed is None:
+            return
+
+        user_id, username = self._get_user_info(event)
+        self._track_user(event)
+        download_id = str(uuid.uuid4())
+
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
+
+        reply_to = int(event.message.id) if event.message is not None else None
+        processing_msg = None
+        file_path = None
+        try:
+            client = event.client
+            if client is None:
+                await event.respond(
+                    "Произошла ошибка: клиент Telegram недоступен.",
+                    reply_to=reply_to,
+                )
+                return
+
+            action = "audio" if parsed.mode == "audio" else "video"
+            async with client.action(event.chat_id, action):
+                processing_msg = await event.respond(
+                    f"Загрузка ({parsed.description})…",
+                    reply_to=reply_to,
+                )
+                file_path, metadata, media_kind = await self._download_for_inline(parsed)
+                caption_kwargs = {
+                    **self._caption_kwargs(user_id),
+                    "reply_to": reply_to,
+                }
+                if media_kind == "audio":
+                    await send_audio_content(
+                        event, file_path, metadata, self.bot_username, **caption_kwargs
+                    )
+                elif media_kind == "photo":
+                    await send_image_content(
+                        event,
+                        file_path,
+                        self.bot_username,
+                        metadata=metadata,
+                        **caption_kwargs,
+                    )
+                else:
+                    await send_video_content(
+                        event, file_path, metadata, self.bot_username, **caption_kwargs
+                    )
+                self._track_parsed_download(
+                    parsed, user_id, username, success=True, source="group"
+                )
+        except Exception as e:
+            logger.error(f"Group download failed for {parsed.url}: {e}")
+            self._track_parsed_download(
+                parsed,
+                user_id,
+                username,
+                success=False,
+                error_message=str(e),
+                source="group",
+            )
+            try:
+                await event.respond(
+                    f"❌ Не удалось загрузить: {e!s}",
+                    reply_to=reply_to,
+                )
+            except Exception as send_error:
+                logger.error(f"Failed to send group error reply: {send_error}")
+        finally:
+            if processing_msg is not None:
+                try:
+                    await processing_msg.delete()
+                except Exception:
+                    pass
+            if file_path:
+                self._cleanup_download_file(file_path)
+            await self.download_limiter.finish_download(user_id, download_id)
 
     async def _handle_tiktok(self, event: Message, url: str):
         """Handle TikTok video download."""
@@ -1157,7 +1247,26 @@ class BotHandlers:
         error_message: str | None = None,
     ):
         """Record inline download stats with source=inline."""
-        source = "inline"
+        self._track_parsed_download(
+            parsed,
+            user_id,
+            username,
+            success=success,
+            error_message=error_message,
+            source="inline",
+        )
+
+    def _track_parsed_download(
+        self,
+        parsed: ParsedInlineQuery,
+        user_id: int,
+        username: str | None,
+        *,
+        success: bool,
+        source: str,
+        error_message: str | None = None,
+    ):
+        """Record download stats for a parsed media link."""
         if parsed.platform == "youtube" and parsed.mode == "audio":
             self.stats.track_audio_download(
                 user_id,

@@ -657,6 +657,7 @@ async def send_video_content(
     *,
     show_bot_caption: bool = True,
     show_title: bool = True,
+    reply_to: int | None = None,
 ):
     """Send video file to Telegram with proper attributes."""
     from .captions import build_media_caption
@@ -675,7 +676,13 @@ async def send_video_content(
         supports_streaming=True,
     )
 
-    await event.respond(caption, file=file_path, supports_streaming=True, attributes=[video_attr])
+    await event.respond(
+        caption,
+        file=file_path,
+        supports_streaming=True,
+        attributes=[video_attr],
+        reply_to=reply_to,
+    )
 
 
 async def send_audio_content(
@@ -686,6 +693,7 @@ async def send_audio_content(
     *,
     show_bot_caption: bool = True,
     show_title: bool = True,
+    reply_to: int | None = None,
 ):
     """Send audio file to Telegram with proper attributes."""
     from .captions import build_media_caption
@@ -704,7 +712,7 @@ async def send_audio_content(
         performer=metadata.get("artist", "Unknown Artist"),
     )
 
-    await event.respond(caption, file=file_path, attributes=[audio_attr])
+    await event.respond(caption, file=file_path, attributes=[audio_attr], reply_to=reply_to)
 
 
 async def send_image_content(
@@ -715,6 +723,7 @@ async def send_image_content(
     metadata: dict | None = None,
     show_bot_caption: bool = True,
     show_title: bool = True,
+    reply_to: int | None = None,
 ):
     """Send image file to Telegram."""
     from .captions import build_media_caption
@@ -727,7 +736,7 @@ async def send_image_content(
         show_title=show_title,
     )
 
-    await event.respond(caption, file=file_path)
+    await event.respond(caption, file=file_path, reply_to=reply_to)
 
 
 async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str, dict]:
