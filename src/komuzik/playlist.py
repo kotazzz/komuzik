@@ -51,6 +51,20 @@ class PlaylistSession:
     page: int = 0
     preview_msg_id: int | None = None
     truncated: bool = False
+    cancel_requested: bool = False
+    downloading: bool = False
+
+
+EXCLUSION_HELP = (
+    "**Как убрать треки из загрузки**\n"
+    "Ответьте **reply** на это сообщение текстом:\n\n"
+    "• `-5` — не качать 5-й трек\n"
+    "• `-1,3,8` — не качать 1, 3 и 8\n"
+    "• `-1-20` — не качать с 1 по 20 включительно\n"
+    "• `-1-10,15,20-30` — диапазоны и отдельные номера\n"
+    "• `+5` — вернуть 5-й обратно в загрузку\n\n"
+    "Номера — как в списке ниже. Можно несколько раз подряд."
+)
 
 
 def find_playlist_url(text: str) -> tuple[str, bool] | None:
@@ -189,7 +203,7 @@ def format_preview_page(session: PlaylistSession) -> str:
     if session.truncated:
         lines.append(f"⚠️ Показаны первые {PLAYLIST_MAX_ENTRIES} треков.")
     lines.append("")
-    lines.append("Reply с исключениями: `-1-20`, `-1,5`, `+1`")
+    lines.append(EXCLUSION_HELP)
     lines.append("")
 
     for i in range(start, end):

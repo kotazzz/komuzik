@@ -649,6 +649,88 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
     raise Exception(TIKTOK_ERROR_MESSAGE)
 
 
+async def send_playlist_album(
+    client,
+    chat_id: int,
+    items: list[tuple[str, dict]],
+    *,
+    mode: str,
+    bot_username: str = "",
+    show_bot_caption: bool = True,
+    show_title: bool = True,
+) -> None:
+    """Send up to 10 downloaded files as one Telegram album (media group).
+
+    Falls back to one-by-one send if album upload fails.
+    """
+    from .captions import build_media_caption
+
+    if not items:
+        return
+
+    paths = [path for path, _ in items]
+    captions: list[str] = []
+    for _path, metadata in items:
+        title = metadata.get("title") or metadata.get("track")
+        captions.append(
+            build_media_caption(
+                bot_username=bot_username,
+                title=title if isinstance(title, str) else None,
+                show_bot_caption=show_bot_caption,
+                show_title=show_title,
+            )
+        )
+
+    try:
+        # Telegram album: caption list — first gets shown on album; extras attached where supported
+        kwargs: dict = {"file": paths, "caption": captions}
+        if mode == "video":
+            kwargs["supports_streaming"] = True
+        await client.send_file(chat_id, **kwargs)
+        return
+    except Exception as e:
+        logger.warning(f"Playlist album send failed, falling back to singles: {e}")
+
+    # Fallback: send individually
+    for path, metadata in items:
+        if mode == "audio":
+            # Minimal single sends via client
+            title = metadata.get("title") or metadata.get("track")
+            caption = build_media_caption(
+                bot_username=bot_username,
+                title=title if isinstance(title, str) else None,
+                show_bot_caption=show_bot_caption,
+                show_title=show_title,
+            )
+            audio_attr = DocumentAttributeAudio(
+                duration=metadata.get("duration", 0),
+                title=metadata.get("track", "Unknown"),
+                performer=metadata.get("artist", "Unknown Artist"),
+            )
+            await client.send_file(chat_id, path, caption=caption, attributes=[audio_attr])
+        else:
+            title = metadata.get("title")
+            caption = build_media_caption(
+                bot_username=bot_username,
+                title=title if isinstance(title, str) else None,
+                show_bot_caption=show_bot_caption,
+                show_title=show_title,
+            )
+            video_attr = DocumentAttributeVideo(
+                duration=metadata.get("duration", 0),
+                w=metadata.get("width", DEFAULT_VIDEO_WIDTH),
+                h=metadata.get("height", DEFAULT_VIDEO_HEIGHT),
+                supports_streaming=True,
+            )
+            await client.send_file(
+                chat_id,
+                path,
+                caption=caption,
+                supports_streaming=True,
+                attributes=[video_attr],
+            )
+
+
 async def send_video_content(
     event: Message,
     file_path: str,

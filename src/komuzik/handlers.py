@@ -32,6 +32,7 @@ from .downloaders import (
     search_youtube,
     send_audio_content,
     send_image_content,
+    send_playlist_album,
     send_video_content,
 )
 from .inline_media import (
@@ -660,7 +661,12 @@ class BotHandlers:
         new_excluded = parse_exclusion_ops(text, len(session.entries), session.excluded)
         if new_excluded is None:
             await event.respond(
-                "Не понял исключения. Примеры: `-1-20`, `-1,5,8`, `+1`",
+                "Не понял команду.\n\n"
+                "Ответьте **reply** на превью плейлиста, например:\n"
+                "• `-5` — убрать 5-й\n"
+                "• `-1,3,8` — убрать несколько\n"
+                "• `-1-20` — убрать диапазон\n"
+                "• `+5` — вернуть 5-й",
                 reply_to=session.preview_msg_id,
             )
             return True
@@ -703,10 +709,15 @@ class BotHandlers:
 
         if data == "pl_hint":
             await event.answer(
-                "Сначала выберите Видео или Аудио, затем качество. "
-                "Исключения — reply на это сообщение.",
+                "Сначала Видео или Аудио → качество. "
+                "Чтобы убрать треки — reply на превью (см. инструкцию в сообщении).",
                 alert=True,
             )
+            return
+
+        if data == "pl_stop":
+            session.cancel_requested = True
+            await event.answer("⏹ Останавливаю… дошлю уже скачанное.")
             return
 
         if data == "pl_prev":
@@ -785,7 +796,7 @@ class BotHandlers:
     async def _download_playlist(
         self, event, session: PlaylistSession, *, mode: str, quality: str
     ) -> None:
-        """Sequentially download selected playlist entries with progress."""
+        """Download in batches of 10; progress per file; send as albums."""
         user_id = session.user_id
         username = None
         try:
@@ -803,46 +814,102 @@ class BotHandlers:
         if not await self._check_download_limit(event, user_id, download_id):
             return
 
+        session.downloading = True
+        session.cancel_requested = False
         total = len(entries)
-        ok = 0
+        done = 0
         fail = 0
-        progress = await event.edit(
-            f"⏳ Плейлист: 0/{total}…\nРежим: {mode} {quality}"
+        sent = 0
+        caption_kw = self._caption_kwargs(user_id)
+        stop_btn = [[Button.inline("⏹ Стоп", data="pl_stop")]]
+
+        async def update_progress(text: str) -> None:
+            try:
+                await event.edit(text, buttons=stop_btn, link_preview=False)
+            except Exception:
+                try:
+                    await event.respond(text, buttons=stop_btn, link_preview=False)
+                except Exception:
+                    pass
+
+        await update_progress(
+            f"⏳ Плейлист **{session.title}**\n"
+            f"Готово: **0/{total}** · отправлено: 0\n"
+            f"Режим: {mode} {quality}\n\n"
+            "Начинаю…"
         )
+
+        batch: list[tuple[str, dict]] = []
+        cancelled = False
+
+        async def flush_batch() -> None:
+            nonlocal sent, batch
+            if not batch:
+                return
+            paths = [p for p, _ in batch]
+            try:
+                await send_playlist_album(
+                    self.client,
+                    event.chat_id,
+                    batch,
+                    mode=mode,
+                    bot_username=self.bot_username,
+                    **caption_kw,
+                )
+                sent += len(batch)
+                if mode == "audio":
+                    self.stats.set_user_last_format(user_id, "audio", quality)
+                else:
+                    self.stats.set_user_last_format(user_id, "video", quality)
+            except Exception as e:
+                logger.error(f"Playlist batch send failed: {e}")
+                try:
+                    await event.respond(f"⚠️ Не удалось отправить пачку ({len(batch)}): {e!s}")
+                except Exception:
+                    pass
+            finally:
+                for path in paths:
+                    self._cleanup_download_file(path)
+                batch = []
 
         try:
             for i, entry in enumerate(entries, start=1):
+                if session.cancel_requested:
+                    cancelled = True
+                    break
+
+                safe_title = entry.title.replace("[", "(").replace("]", ")")[:70]
+                await update_progress(
+                    f"⏳ Плейлист **{session.title}**\n"
+                    f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                    f"Режим: {mode} {quality}\n\n"
+                    f"Сейчас: [{safe_title}]({entry.url})\n"
+                    f"({i}/{total})"
+                )
+
                 file_path = None
                 try:
                     if mode == "audio":
                         file_path, metadata = await download_youtube_audio(entry.url, quality)
-                        await send_audio_content(
-                            event,
-                            file_path,
-                            metadata,
-                            self.bot_username,
-                            **self._caption_kwargs(user_id),
-                        )
                         self.stats.track_audio_download(
                             user_id, quality, username, success=True, source="dm"
                         )
                     else:
                         file_path, metadata = await download_youtube_video(entry.url, quality)
-                        await send_video_content(
-                            event,
-                            file_path,
-                            metadata,
-                            self.bot_username,
-                            **self._caption_kwargs(user_id),
-                        )
                         self.stats.track_video_download(
                             user_id, quality, "youtube", username, success=True, source="dm"
                         )
-                    ok += 1
-                    if mode == "audio":
-                        self.stats.set_user_last_format(user_id, "audio", quality)
-                    else:
-                        self.stats.set_user_last_format(user_id, "video", quality)
+                    batch.append((file_path, metadata))
+                    done += 1
+                    file_path = None
+
+                    await update_progress(
+                        f"⏳ Плейлист **{session.title}**\n"
+                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                        f"Режим: {mode} {quality}\n\n"
+                        f"✅ Скачан: [{safe_title}]({entry.url})\n"
+                        f"В пачке: {len(batch)}/{PLAYLIST_BATCH_SIZE}"
+                    )
                 except Exception as e:
                     fail += 1
                     logger.error(f"Playlist item failed {entry.url}: {e}")
@@ -866,32 +933,53 @@ class BotHandlers:
                             source="dm",
                         )
                     try:
-                        await event.respond(f"⚠️ Пропуск {i}/{total}: {entry.title[:60]} — {e!s}")
+                        await event.respond(
+                            f"⚠️ Пропуск {i}/{total}: {entry.title[:60]} — {e!s}"
+                        )
                     except Exception:
                         pass
                 finally:
                     if file_path:
                         self._cleanup_download_file(file_path)
 
-                if i % PLAYLIST_BATCH_SIZE == 0 or i == total:
-                    try:
-                        if progress is not None:
-                            await progress.edit(
-                                f"⏳ Плейлист: {i}/{total} (✅ {ok} · ❌ {fail})\n"
-                                f"Режим: {mode} {quality}"
-                            )
-                    except Exception:
-                        pass
+                if len(batch) >= PLAYLIST_BATCH_SIZE:
+                    await update_progress(
+                        f"⏳ Плейлист **{session.title}**\n"
+                        f"Готово: **{done}/{total}** · отправляю пачку {len(batch)}…"
+                    )
+                    await flush_batch()
+                    await update_progress(
+                        f"⏳ Плейлист **{session.title}**\n"
+                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                        f"Режим: {mode} {quality}"
+                    )
 
-            summary = f"✅ Плейлист готов: {ok}/{total}"
-            if fail:
-                summary += f" (ошибок: {fail})"
+                if session.cancel_requested:
+                    cancelled = True
+                    break
+
+            if batch:
+                await update_progress(
+                    f"⏳ Плейлист **{session.title}**\n"
+                    f"Готово: **{done}/{total}** · отправляю остаток ({len(batch)})…"
+                )
+                await flush_batch()
+
+            if cancelled:
+                summary = (
+                    f"⏹ Остановлено.\n"
+                    f"Скачано: {done}/{total} · отправлено: {sent} · ошибок: {fail}"
+                )
+            else:
+                summary = f"✅ Плейлист готов: отправлено {sent}/{total}"
+                if fail:
+                    summary += f" (ошибок: {fail})"
             try:
-                if progress is not None:
-                    await progress.edit(summary)
+                await event.edit(summary)
             except Exception:
                 await event.respond(summary)
         finally:
+            session.downloading = False
             await self.download_limiter.finish_download(user_id, download_id)
             PLAYLIST_STATES.pop(user_id, None)
 
