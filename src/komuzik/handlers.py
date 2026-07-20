@@ -13,7 +13,6 @@ from telethon.tl.custom import Message
 from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
-    MSG_HELP,
     MSG_PRIVACY,
     MSG_START,
     PINTEREST_REGEX,
@@ -35,6 +34,19 @@ from .downloaders import (
     send_image_content,
     send_playlist_album,
     send_video_content,
+)
+from .help_pages import (
+    INFO_GITHUB_URL,
+    INFO_TEXT,
+    admin_page_buttons,
+    admin_page_text,
+    admin_toc_buttons,
+    admin_toc_text,
+    resolve_help_callback,
+    user_page_buttons,
+    user_page_text,
+    user_toc_buttons,
+    user_toc_text,
 )
 from .inline_media import (
     PM_UNAVAILABLE_MESSAGE,
@@ -129,6 +141,7 @@ class BotHandlers:
         """Register all event handlers."""
         self.client.on(events.NewMessage(pattern="/start"))(self.start_handler)
         self.client.on(events.NewMessage(pattern="/help"))(self.help_handler)
+        self.client.on(events.NewMessage(pattern=r"^/info(?:@\w+)?"))(self.info_handler)
         self.client.on(events.NewMessage(pattern="/privacy"))(self.privacy_handler)
         self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
         self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
@@ -319,14 +332,62 @@ class BotHandlers:
         await event.respond(MSG_START, link_preview=False)
 
     async def help_handler(self, event: Message):
-        """Handle /help command."""
+        """Handle /help — sectioned TOC with inline navigation."""
         user_id, _ = self._get_user_info(event)
         if await self._reject_if_banned(
             event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
         ):
             return
         self._track_user(event)
-        await event.respond(MSG_HELP)
+        is_admin = bool(user_id and self._is_bot_admin(user_id))
+        await event.respond(
+            user_toc_text(),
+            buttons=user_toc_buttons(is_admin=is_admin),
+            link_preview=False,
+        )
+
+    async def info_handler(self, event: Message):
+        """Handle /info — author, source repo, report hint."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
+        self._track_user(event)
+        await event.respond(
+            INFO_TEXT,
+            buttons=[[Button.url("Исходный код", INFO_GITHUB_URL)]],
+            link_preview=False,
+        )
+
+    async def _handle_help_callback(self, event, data: str) -> None:
+        """Navigate paginated /help (edit same message)."""
+        user_id = cast("int | None", event.sender_id)
+        kind, slug = resolve_help_callback(data)
+        is_admin = bool(user_id and self._is_bot_admin(user_id))
+
+        if kind in {"admin_toc", "admin_page"} and not is_admin:
+            await event.answer("Нет доступа.", alert=True)
+            return
+
+        try:
+            if kind == "user_toc":
+                text, buttons = user_toc_text(), user_toc_buttons(is_admin=is_admin)
+            elif kind == "admin_toc":
+                text, buttons = admin_toc_text(), admin_toc_buttons()
+            elif kind == "user_page" and slug is not None:
+                text, buttons = user_page_text(slug), user_page_buttons()
+            elif kind == "admin_page" and slug is not None:
+                text, buttons = admin_page_text(slug), admin_page_buttons()
+            else:
+                await event.answer()
+                return
+        except KeyError:
+            await event.answer()
+            return
+
+        await event.edit(text, buttons=buttons, link_preview=False)
+        await event.answer()
 
     async def privacy_handler(self, event: Message):
         """Handle /privacy — send rules and privacy policy link."""
@@ -2408,6 +2469,10 @@ class BotHandlers:
             event, user_id, chat_is_group=not bool(getattr(event, "is_private", True))
         ):
             await event.answer()
+            return
+
+        if data.startswith("help_"):
+            await self._handle_help_callback(event, data)
             return
 
         if data.startswith("settings_"):
