@@ -2859,35 +2859,21 @@ class BotHandlers:
         )
         await event.answer("Сохранено")
 
-    def _youtube_id_from_url(self, url: str) -> str | None:
-        match = YOUTUBE_REGEX.search(url)
-        if not match:
-            return None
-        for group in reversed(match.groups()):
-            if isinstance(group, str) and re.fullmatch(r"[\w-]{11}", group):
-                return group
-        return None
-
-    async def _safe_inline_answer(self, event, articles: list, *, gallery: bool = False) -> None:
+    def _safe_inline_answer(self, event, articles: list) -> None:
         """Answer inline query; ignore stale query_id and log other failures."""
+        # Note: no thumbs/gallery here — preview collage exists only in DM /search.
         try:
-            await event.answer(articles, cache_time=0, gallery=gallery)
+            await event.answer(articles, cache_time=0)
         except QueryIdInvalidError:
             logger.info("Inline answer skipped: query_id already invalid (user typed further)")
         except Exception as e:
             logger.warning(f"Inline answer failed: {e}")
-            try:
-                await event.answer(articles, cache_time=0, gallery=False)
-            except QueryIdInvalidError:
-                logger.info("Inline retry skipped: stale query_id")
-            except Exception as e2:
-                logger.error(f"Inline answer retry failed: {e2}")
 
     async def inline_query_handler(self, event):
         """Answer inline queries: URL download or YouTube text search.
 
         Keep this path fast: Telegram cancels unanswered queries in ~1–2s while typing.
-        No network metadata/thumbs before answer — they routinely blow the deadline.
+        No preview/thumbs in inline — use /search in DM for Pillow preview.
         """
         t0 = asyncio.get_running_loop().time()
         query_text = event.text or ""
@@ -2918,17 +2904,12 @@ class BotHandlers:
             parsed = parse_inline_query(query_text, default_quality=default_quality)
             builder = event.builder
 
-            # --- URL / link path: answer immediately, no yt-dlp metadata ---
+            # --- URL / link path: answer immediately ---
             if parsed:
                 token = uuid.uuid4().hex[:16]
                 INLINE_JOBS[token] = parsed
-                title = parsed.description
-                # Prefer human-looking title from URL id without network
-                vid = self._youtube_id_from_url(parsed.url)
-                if vid:
-                    title = f"YouTube · {parsed.quality}" if parsed.platform == "youtube" else parsed.description
                 result = await builder.article(
-                    title=title[:64],
+                    title=parsed.description[:64],
                     description=(parsed.url[:64] if parsed.url else parsed.description),
                     text="⏳ Загрузка…",
                     buttons=[Button.inline("⏳", b"noop")],
@@ -2948,6 +2929,7 @@ class BotHandlers:
                     text=(
                         "После @бота укажите ссылку или текст для поиска на YouTube.\n"
                         "Ссылка: `music` / `480` + URL. Поиск: просто слова.\n"
+                        "Превью картинками — только в ЛС через /search.\n"
                         "Сначала напишите боту /start в ЛС."
                     ),
                     buttons=[Button.inline("⏳", b"noop")],
@@ -3044,7 +3026,7 @@ class BotHandlers:
                 await self._safe_inline_answer(event, [empty])
                 return
 
-            await self._safe_inline_answer(event, articles, gallery=False)
+            await self._safe_inline_answer(event, articles)
             logger.info(
                 f"Inline search answered n={len(articles)} "
                 f"in {asyncio.get_running_loop().time() - t0:.2f}s query={query!r}"

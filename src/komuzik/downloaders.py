@@ -192,7 +192,7 @@ def thumbnail_from_ydl_entry(entry: Mapping[str, Any]) -> str | None:
 
 
 async def get_media_preview(url: str, fallback: str = "Медиа") -> tuple[str, str | None]:
-    """Fetch title and thumbnail URL for inline/search previews."""
+    """Fetch title and thumbnail URL (used by /search preview collage)."""
     try:
         loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
