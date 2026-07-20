@@ -815,6 +815,15 @@ class BotHandlers:
             await event.edit("Нечего скачивать — всё исключено.")
             return
 
+        is_admin = user_id in self.download_limiter.ADMIN_USER_IDS
+        remaining = self.stats.remaining_playlist_quota(user_id, is_admin=is_admin)
+        if remaining is not None and len(entries) > remaining:
+            await event.edit(
+                f"⚠️ Выбрано {len(entries)}, доступно {remaining} до конца дня (МСК). "
+                "Уменьши выбор (исключения) или подожди завтра."
+            )
+            return
+
         download_id = str(uuid.uuid4())
         if not await self._check_download_limit(event, user_id, download_id):
             return
@@ -828,6 +837,15 @@ class BotHandlers:
         caption_kw = self._caption_kwargs(user_id)
         stop_btn = [[Button.inline("⏹ Стоп", data="pl_stop")]]
 
+        def quota_status() -> str:
+            if is_admin:
+                return ""
+            limit = self.stats.effective_playlist_limit(user_id, is_admin=False)
+            if limit is None:
+                return ""
+            used = self.stats.get_playlist_usage(user_id)
+            return f" · лимит: {used}/{limit}"
+
         async def update_progress(text: str) -> None:
             try:
                 await event.edit(text, buttons=stop_btn, link_preview=False)
@@ -839,7 +857,7 @@ class BotHandlers:
 
         await update_progress(
             f"⏳ Плейлист **{session.title}**\n"
-            f"Готово: **0/{total}** · отправлено: 0\n"
+            f"Готово: **0/{total}** · отправлено: 0{quota_status()}\n"
             f"Режим: {mode} {quality}\n\n"
             "Начинаю…"
         )
@@ -905,6 +923,8 @@ class BotHandlers:
                     if delivered:
                         sent += delivered
                         self.stats.set_user_last_format(user_id, "audio", quality)
+                        if not is_admin:
+                            self.stats.increment_playlist_usage(user_id, delivered)
                 except Exception as e:
                     logger.error(f"Playlist batch send failed: {e}")
                     try:
@@ -927,6 +947,8 @@ class BotHandlers:
                     **caption_kw,
                 )
                 sent += len(batch)
+                if not is_admin:
+                    self.stats.increment_playlist_usage(user_id, len(batch))
                 if mode == "audio":
                     self.stats.set_user_last_format(user_id, "audio", quality)
                 else:
@@ -951,7 +973,7 @@ class BotHandlers:
                 safe_title = entry.title.replace("[", "(").replace("]", ")")[:70]
                 await update_progress(
                     f"⏳ Плейлист **{session.title}**\n"
-                    f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                    f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
                     f"Режим: {mode} {quality}\n\n"
                     f"Сейчас: [{safe_title}]({entry.url})\n"
                     f"({i}/{total})"
@@ -975,7 +997,7 @@ class BotHandlers:
 
                     await update_progress(
                         f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
                         f"Режим: {mode} {quality}\n\n"
                         f"✅ Скачан: [{safe_title}]({entry.url})\n"
                         f"В пачке: {len(batch)}/{PLAYLIST_BATCH_SIZE}"
@@ -1025,7 +1047,7 @@ class BotHandlers:
                     await flush_batch()
                     await update_progress(
                         f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}\n"
+                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
                         f"Режим: {mode} {quality}"
                     )
 
