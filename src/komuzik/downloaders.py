@@ -14,7 +14,12 @@ from typing import Any, cast
 
 import yt_dlp
 from telethon.tl.custom import Message
-from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
+from telethon.tl.types import (
+    DocumentAttributeAudio,
+    DocumentAttributeFilename,
+    DocumentAttributeVideo,
+    InputMediaUploadedDocument,
+)
 from yt_dlp.utils import DownloadError
 
 from .config import (
@@ -696,36 +701,50 @@ async def send_playlist_album(
             )
         return
 
-    # Video: one album (media group); upload once, reuse handles on fallback.
-    uploaded = [await client.upload_file(path) for path, _ in items]
+    # Video album: each item needs DocumentAttributeVideo w/h — without them
+    # Telegram clients often render the media group as a square.
     album_caption = f"📦 {len(items)} шт."
     if show_bot_caption and bot_username:
         album_caption = f"{album_caption}\n@{bot_username}"
 
-    try:
-        await client.send_file(
-            chat_id,
-            file=uploaded,
-            caption=album_caption,
-            supports_streaming=True,
+    def _video_attrs(path: str, metadata: dict) -> list:
+        return [
+            DocumentAttributeVideo(
+                duration=int(metadata.get("duration") or 0),
+                w=int(metadata.get("width") or DEFAULT_VIDEO_WIDTH),
+                h=int(metadata.get("height") or DEFAULT_VIDEO_HEIGHT),
+                supports_streaming=True,
+            ),
+            DocumentAttributeFilename(os.path.basename(path)),
+        ]
+
+    uploaded_items: list[tuple[Any, str, dict]] = []
+    for path, metadata in items:
+        handle = await client.upload_file(path)
+        uploaded_items.append((handle, path, metadata))
+
+    media = [
+        InputMediaUploadedDocument(
+            file=handle,
+            mime_type="video/mp4",
+            attributes=_video_attrs(path, metadata),
         )
+        for handle, path, metadata in uploaded_items
+    ]
+
+    try:
+        await client.send_file(chat_id, file=media, caption=album_caption)
         return
     except Exception as e:
         logger.warning(f"Playlist album send failed, falling back to singles: {e}")
 
-    for handle, (_path, metadata) in zip(uploaded, items, strict=True):
-        video_attr = DocumentAttributeVideo(
-            duration=metadata.get("duration", 0),
-            w=metadata.get("width", DEFAULT_VIDEO_WIDTH),
-            h=metadata.get("height", DEFAULT_VIDEO_HEIGHT),
-            supports_streaming=True,
-        )
+    for handle, path, metadata in uploaded_items:
         await client.send_file(
             chat_id,
             handle,
             caption=_item_caption(metadata),
             supports_streaming=True,
-            attributes=[video_attr],
+            attributes=_video_attrs(path, metadata),
         )
 
 
@@ -750,9 +769,9 @@ async def send_video_content(
     )
 
     video_attr = DocumentAttributeVideo(
-        duration=metadata.get("duration", 0),
-        w=metadata.get("width", DEFAULT_VIDEO_WIDTH),
-        h=metadata.get("height", DEFAULT_VIDEO_HEIGHT),
+        duration=int(metadata.get("duration") or 0),
+        w=int(metadata.get("width") or DEFAULT_VIDEO_WIDTH),
+        h=int(metadata.get("height") or DEFAULT_VIDEO_HEIGHT),
         supports_streaming=True,
     )
 
