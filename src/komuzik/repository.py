@@ -1,6 +1,7 @@
 """Repository layer for statistics tracking and data access."""
 
 import logging
+from dataclasses import dataclass
 
 from .database import Database
 
@@ -18,6 +19,15 @@ VIDEO_LIKE_EVENT_TYPES = (
     "pinterest_download",
 )
 AUDIO_EVENT_TYPES = ("audio_download",)
+
+
+@dataclass(frozen=True)
+class UserSettings:
+    """Per-user media caption preferences."""
+
+    user_id: int
+    show_bot_caption: bool = True
+    show_title: bool = True
 
 
 class StatsRepository:
@@ -521,3 +531,61 @@ class StatsRepository:
         except Exception as e:
             logger.error(f"Failed to get reports: {e}")
             return []
+
+    # === User settings ===
+
+    def get_user_settings(self, user_id: int) -> UserSettings:
+        """Return caption settings for a user (defaults: both enabled)."""
+        try:
+            row = self.db.fetchone(
+                """SELECT show_bot_caption, show_title
+                   FROM user_settings WHERE user_id = ?""",
+                (user_id,),
+            )
+            if not row:
+                return UserSettings(user_id=user_id)
+            return UserSettings(
+                user_id=user_id,
+                show_bot_caption=bool(row[0]),
+                show_title=bool(row[1]),
+            )
+        except Exception as e:
+            logger.error(f"Failed to get settings for {user_id}: {e}")
+            return UserSettings(user_id=user_id)
+
+    def set_user_setting(self, user_id: int, key: str, value: bool) -> UserSettings:
+        """Upsert a single user setting key ('show_bot_caption' or 'show_title')."""
+        if key not in {"show_bot_caption", "show_title"}:
+            raise ValueError(f"Unknown settings key: {key}")
+
+        current = self.get_user_settings(user_id)
+        show_bot = value if key == "show_bot_caption" else current.show_bot_caption
+        show_title = value if key == "show_title" else current.show_title
+
+        try:
+            self.db.execute(
+                """INSERT INTO user_settings (user_id, show_bot_caption, show_title, updated_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     show_bot_caption = excluded.show_bot_caption,
+                     show_title = excluded.show_title,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (user_id, int(show_bot), int(show_title)),
+            )
+        except Exception as e:
+            logger.error(f"Failed to save settings for {user_id}: {e}")
+
+        return UserSettings(
+            user_id=user_id,
+            show_bot_caption=show_bot,
+            show_title=show_title,
+        )
+
+    def toggle_user_setting(self, user_id: int, key: str) -> UserSettings:
+        """Toggle a boolean user setting and return the updated settings."""
+        current = self.get_user_settings(user_id)
+        if key == "show_bot_caption":
+            return self.set_user_setting(user_id, key, not current.show_bot_caption)
+        if key == "show_title":
+            return self.set_user_setting(user_id, key, not current.show_title)
+        raise ValueError(f"Unknown settings key: {key}")

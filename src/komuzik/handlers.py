@@ -74,6 +74,7 @@ class BotHandlers:
         """Register all event handlers."""
         self.client.on(events.NewMessage(pattern="/start"))(self.start_handler)
         self.client.on(events.NewMessage(pattern="/help"))(self.help_handler)
+        self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
         self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
         self.client.on(events.NewMessage(pattern="/post"))(self.post_handler)
         self.client.on(events.NewMessage(pattern="/report"))(self.report_handler)
@@ -108,6 +109,14 @@ class BotHandlers:
     def _resolve_callback_url(self, token: str) -> str | None:
         """Resolve a callback token to its stored URL."""
         return CALLBACK_URLS.get(token)
+
+    def _caption_kwargs(self, user_id: int) -> dict[str, bool]:
+        """Load caption preferences for send_* helpers."""
+        settings = self.stats.get_user_settings(user_id)
+        return {
+            "show_bot_caption": settings.show_bot_caption,
+            "show_title": settings.show_title,
+        }
 
     def _cleanup_download_file(self, file_path: str):
         """Remove the temporary directory that contains a downloaded file."""
@@ -179,7 +188,13 @@ class BotHandlers:
                     file_path, metadata = await download_func(url, quality)
                     logger.info(f"{content_type.capitalize()} downloaded successfully: {file_path}")
 
-                    await send_func(event, file_path, metadata, self.bot_username)
+                    await send_func(
+                        event,
+                        file_path,
+                        metadata,
+                        self.bot_username,
+                        **self._caption_kwargs(user_id),
+                    )
                     if processing_msg is not None:
                         await processing_msg.delete()
 
@@ -206,6 +221,38 @@ class BotHandlers:
         """Handle /help command."""
         self._track_user(event)
         await event.respond(MSG_HELP)
+
+    async def settings_handler(self, event: Message):
+        """Handle /settings command."""
+        self._track_user(event)
+        user_id, _ = self._get_user_info(event)
+        settings = self.stats.get_user_settings(user_id)
+        await event.respond(
+            self._format_settings_message(settings),
+            buttons=self._settings_buttons(settings),
+        )
+
+    def _format_settings_message(self, settings) -> str:
+        bot_state = "✅ Вкл" if settings.show_bot_caption else "❌ Выкл"
+        title_state = "✅ Вкл" if settings.show_title else "❌ Выкл"
+        return (
+            "⚙️ **Настройки подписи**\n\n"
+            f"🤖 Подпись бота (@{self.bot_username or 'bot'}): {bot_state}\n"
+            f"📝 Название видео: {title_state}\n\n"
+            "По умолчанию оба пункта включены."
+        )
+
+    def _settings_buttons(self, settings):
+        bot_label = (
+            "🤖 Подпись бота: выключить"
+            if settings.show_bot_caption
+            else "🤖 Подпись бота: включить"
+        )
+        title_label = "📝 Название: выключить" if settings.show_title else "📝 Название: включить"
+        return [
+            [Button.inline(bot_label, data="settings_bot")],
+            [Button.inline(title_label, data="settings_title")],
+        ]
 
     async def stats_handler(self, event: Message):
         """Handle /stats command."""
@@ -384,7 +431,13 @@ class BotHandlers:
                     file_path, metadata = await download_tiktok_video(url)
                     logger.info(f"TikTok video downloaded successfully: {file_path}")
 
-                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await send_video_content(
+                        event,
+                        file_path,
+                        metadata,
+                        self.bot_username,
+                        **self._caption_kwargs(user_id),
+                    )
                     if processing_msg is not None:
                         await processing_msg.delete()
 
@@ -440,7 +493,13 @@ class BotHandlers:
                     file_path, metadata = await download_youtube_video(url, quality="best")
                     logger.info(f"YouTube Short downloaded successfully: {file_path}")
 
-                    await send_video_content(event, file_path, metadata, self.bot_username)
+                    await send_video_content(
+                        event,
+                        file_path,
+                        metadata,
+                        self.bot_username,
+                        **self._caption_kwargs(user_id),
+                    )
                     if processing_msg is not None:
                         await processing_msg.delete()
 
@@ -716,10 +775,23 @@ class BotHandlers:
                     logger.info(f"Twitter content downloaded successfully: {file_path}")
 
                     # Send appropriate content type
+                    caption_kw = self._caption_kwargs(user_id)
                     if metadata.get("content_type") == "photo":
-                        await send_image_content(event, file_path, self.bot_username)
+                        await send_image_content(
+                            event,
+                            file_path,
+                            self.bot_username,
+                            metadata=metadata,
+                            **caption_kw,
+                        )
                     else:
-                        await send_video_content(event, file_path, metadata, self.bot_username)
+                        await send_video_content(
+                            event,
+                            file_path,
+                            metadata,
+                            self.bot_username,
+                            **caption_kw,
+                        )
 
                     if processing_msg is not None:
                         await processing_msg.delete()
@@ -762,10 +834,23 @@ class BotHandlers:
                     file_path, metadata = await download_pinterest_content(url)
                     logger.info(f"Pinterest content downloaded successfully: {file_path}")
 
+                    caption_kw = self._caption_kwargs(user_id)
                     if metadata.get("content_type") == "photo":
-                        await send_image_content(event, file_path, self.bot_username)
+                        await send_image_content(
+                            event,
+                            file_path,
+                            self.bot_username,
+                            metadata=metadata,
+                            **caption_kw,
+                        )
                     else:
-                        await send_video_content(event, file_path, metadata, self.bot_username)
+                        await send_video_content(
+                            event,
+                            file_path,
+                            metadata,
+                            self.bot_username,
+                            **caption_kw,
+                        )
 
                     if processing_msg is not None:
                         await processing_msg.delete()
@@ -859,6 +944,10 @@ class BotHandlers:
             await event.edit("❌ Отправка отчета отменена.")
             return
 
+        if data.startswith("settings_"):
+            await self._handle_settings_callback(event, data)
+            return
+
         # Route callbacks using dictionary
         handlers: dict[str, CallbackHandler] = {
             "select_": self._handle_select_callback,
@@ -874,6 +963,27 @@ class BotHandlers:
                 return
 
         logger.warning(f"Unknown callback data: {data}")
+
+    async def _handle_settings_callback(self, event, data: str):
+        """Toggle caption settings from inline buttons."""
+        user_id = cast("int | None", event.sender_id)
+        if user_id is None:
+            await event.answer("Не удалось определить пользователя.", alert=True)
+            return
+
+        key = "show_bot_caption" if data == "settings_bot" else None
+        if data == "settings_title":
+            key = "show_title"
+        if key is None:
+            await event.answer()
+            return
+
+        settings = self.stats.toggle_user_setting(user_id, key)
+        await event.edit(
+            self._format_settings_message(settings),
+            buttons=self._settings_buttons(settings),
+        )
+        await event.answer("Сохранено")
 
     async def inline_query_handler(self, event):
         """Answer inline queries with a placeholder article for supported links."""
@@ -956,6 +1066,7 @@ class BotHandlers:
                     media_kind,
                     metadata,
                     self.bot_username,
+                    **self._caption_kwargs(user_id),
                 )
             except Exception as e:
                 if is_pm_unavailable_error(e):

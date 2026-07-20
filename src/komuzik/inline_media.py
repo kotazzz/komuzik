@@ -14,6 +14,7 @@ from telethon.errors import (
 )
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
 
+from .captions import build_media_caption
 from .config import DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,18 @@ async def stage_media_to_user(
     media_kind: str,
     metadata: dict,
     bot_username: str = "",
+    *,
+    show_bot_caption: bool = True,
+    show_title: bool = True,
 ):
     """Send media to user PM for file_id staging. Returns the sent Message."""
-    caption = f"@{bot_username}" if bot_username else ""
+    title = metadata.get("title") or metadata.get("track")
+    caption = build_media_caption(
+        bot_username=bot_username,
+        title=title if isinstance(title, str) else None,
+        show_bot_caption=show_bot_caption,
+        show_title=show_title,
+    )
 
     if media_kind == "video":
         video_attr = DocumentAttributeVideo(

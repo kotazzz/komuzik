@@ -89,6 +89,16 @@ class Database:
             )
         """)
 
+        # Per-user caption preferences (defaults: both enabled)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                show_bot_caption INTEGER NOT NULL DEFAULT 1,
+                show_title INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Create indexes for better query performance
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_statistics_event_type 

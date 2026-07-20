@@ -590,6 +590,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
             _ensure_file_within_limit(file_path, "TikTok video")
 
             metadata = {
+                "title": info.get("title") or info.get("description") or "",
                 "duration": _safe_int(info.get("duration"), 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
@@ -649,10 +650,23 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
 
 
 async def send_video_content(
-    event: Message, file_path: str, metadata: dict, bot_username: str = ""
+    event: Message,
+    file_path: str,
+    metadata: dict,
+    bot_username: str = "",
+    *,
+    show_bot_caption: bool = True,
+    show_title: bool = True,
 ):
     """Send video file to Telegram with proper attributes."""
-    caption = f"@{bot_username}" if bot_username else ""
+    from .captions import build_media_caption
+
+    caption = build_media_caption(
+        bot_username=bot_username,
+        title=metadata.get("title"),
+        show_bot_caption=show_bot_caption,
+        show_title=show_title,
+    )
 
     video_attr = DocumentAttributeVideo(
         duration=metadata.get("duration", 0),
@@ -665,10 +679,24 @@ async def send_video_content(
 
 
 async def send_audio_content(
-    event: Message, file_path: str, metadata: dict, bot_username: str = ""
+    event: Message,
+    file_path: str,
+    metadata: dict,
+    bot_username: str = "",
+    *,
+    show_bot_caption: bool = True,
+    show_title: bool = True,
 ):
     """Send audio file to Telegram with proper attributes."""
-    caption = f"@{bot_username}" if bot_username else ""
+    from .captions import build_media_caption
+
+    title = metadata.get("title") or metadata.get("track")
+    caption = build_media_caption(
+        bot_username=bot_username,
+        title=title if isinstance(title, str) else None,
+        show_bot_caption=show_bot_caption,
+        show_title=show_title,
+    )
 
     audio_attr = DocumentAttributeAudio(
         duration=metadata.get("duration", 0),
@@ -679,9 +707,25 @@ async def send_audio_content(
     await event.respond(caption, file=file_path, attributes=[audio_attr])
 
 
-async def send_image_content(event: Message, file_path: str, bot_username: str = ""):
+async def send_image_content(
+    event: Message,
+    file_path: str,
+    bot_username: str = "",
+    *,
+    metadata: dict | None = None,
+    show_bot_caption: bool = True,
+    show_title: bool = True,
+):
     """Send image file to Telegram."""
-    caption = f"@{bot_username}" if bot_username else ""
+    from .captions import build_media_caption
+
+    meta = metadata or {}
+    caption = build_media_caption(
+        bot_username=bot_username,
+        title=meta.get("title"),
+        show_bot_caption=show_bot_caption,
+        show_title=show_title,
+    )
 
     await event.respond(caption, file=file_path)
 
@@ -885,6 +929,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
             _ensure_file_within_limit(file_path, "Twitter content")
 
             metadata = {
+                "title": info.get("title") or info.get("description") or "",
                 "duration": _safe_int(info.get("duration"), 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
@@ -1002,6 +1047,7 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
             _ensure_file_within_limit(file_path, "Pinterest content")
 
             metadata = {
+                "title": info.get("title") or info.get("description") or "",
                 "duration": _safe_int(info.get("duration"), 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
