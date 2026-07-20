@@ -1,9 +1,11 @@
 """Download functionality for YouTube and TikTok content."""
 
 import asyncio
+import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -214,14 +216,183 @@ def _extract_metadata(info: Mapping[str, Any], title: str) -> tuple[str, str]:
 
 
 def _build_video_format(quality: str) -> str:
-    """Build format string for video download."""
+    """Build format string for video download.
+
+    Prefer H.264 (avc1) + AAC (mp4a): Telegram iOS/macOS cannot play AV1/VP9
+    in-app (black picture, audio works). Android and external players are fine.
+    """
+    # Fallbacks still allow non-H.264; _ensure_telegram_ios_video re-encodes if needed.
     try:
         if quality.endswith("p"):
             height = int(quality[:-1])
-            return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/bestvideo+bestaudio/best"
-        return "bestvideo+bestaudio/best"
+            h = f"[height<={height}]"
+            return (
+                f"bestvideo{h}[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                f"best{h}[vcodec^=avc1][acodec^=mp4a]/"
+                f"bestvideo{h}[vcodec^=avc1]+bestaudio/"
+                f"best{h}/"
+                f"bestvideo{h}+bestaudio/best"
+            )
+        return (
+            "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+            "best[vcodec^=avc1][acodec^=mp4a]/"
+            "bestvideo[vcodec^=avc1]+bestaudio/"
+            "bestvideo+bestaudio/best"
+        )
     except (ValueError, AttributeError):
-        return "bestvideo+bestaudio/best"
+        return "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best"
+
+
+def _is_h264_codec(codec: str | None) -> bool:
+    """Return True if codec name is H.264/AVC."""
+    if not codec:
+        return False
+    name = codec.lower()
+    return name in {"h264", "avc1", "avc"} or name.startswith(("avc1", "h264"))
+
+
+async def _probe_video_file(file_path: str) -> dict[str, Any]:
+    """Read codec/dimensions/duration from a media file via ffprobe."""
+    loop = asyncio.get_running_loop()
+
+    def _run() -> dict[str, Any]:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning(f"ffprobe failed for {file_path}: {result.stderr}")
+            return {}
+        try:
+            return json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    probe = await loop.run_in_executor(None, _run)
+    video_stream = next(
+        (
+            s
+            for s in probe.get("streams", [])
+            if isinstance(s, dict) and s.get("codec_type") == "video"
+        ),
+        None,
+    )
+    audio_stream = next(
+        (
+            s
+            for s in probe.get("streams", [])
+            if isinstance(s, dict) and s.get("codec_type") == "audio"
+        ),
+        None,
+    )
+    fmt_raw = probe.get("format")
+    fmt: dict[str, Any] = fmt_raw if isinstance(fmt_raw, dict) else {}
+
+    duration = 0
+    if video_stream and video_stream.get("duration"):
+        duration = _safe_int(float(video_stream["duration"]), 0)
+    elif fmt.get("duration"):
+        duration = _safe_int(float(fmt["duration"]), 0)
+
+    return {
+        "vcodec": (video_stream or {}).get("codec_name"),
+        "acodec": (audio_stream or {}).get("codec_name"),
+        "width": _safe_int((video_stream or {}).get("width"), 0),
+        "height": _safe_int((video_stream or {}).get("height"), 0),
+        "duration": duration,
+    }
+
+
+async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any]]:
+    """Ensure MP4 is H.264+yuv420p (+AAC when possible) for Telegram iOS/macOS.
+
+    Returns:
+        (path, probe_metadata) — path may be a new file in the same directory.
+
+    """
+    probe = await _probe_video_file(file_path)
+    vcodec = probe.get("vcodec")
+    needs_reencode = not _is_h264_codec(vcodec if isinstance(vcodec, str) else None)
+
+    loop = asyncio.get_running_loop()
+    out_path = str(Path(file_path).with_name(f"{Path(file_path).stem}_tg.mp4"))
+
+    def _run_ffmpeg(args: list[str]) -> None:
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {result.stderr[-2000:]}")
+
+    if needs_reencode:
+        logger.info(
+            f"Re-encoding {file_path} to H.264/AAC for Telegram iOS (source vcodec={vcodec!r})"
+        )
+        await loop.run_in_executor(
+            None,
+            _run_ffmpeg,
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                file_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                out_path,
+            ],
+        )
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        file_path = out_path
+    else:
+        # Remux with faststart so Telegram can stream without full download.
+        logger.debug(f"Remuxing {file_path} with +faststart (already H.264)")
+        await loop.run_in_executor(
+            None,
+            _run_ffmpeg,
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                file_path,
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                out_path,
+            ],
+        )
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        file_path = out_path
+
+    probe = await _probe_video_file(file_path)
+    return file_path, probe
 
 
 def _get_expected_size(info: Mapping[str, Any]) -> int:
@@ -290,6 +461,9 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ],
             "merge_output_format": "mp4",
+            "postprocessor_args": {
+                "ffmpeg": ["-movflags", "+faststart"],
+            },
         }
 
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
@@ -297,13 +471,14 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
 
         # Find the downloaded file
         file_path = _find_downloaded_file(temp_dir, expected_extension="mp4")
+        file_path, probe = await _ensure_telegram_ios_video(file_path)
         _ensure_file_within_limit(file_path, "YouTube video")
 
         metadata = {
             "title": info.get("title", "Unknown"),
-            "duration": info.get("duration", 0),
-            "width": info.get("width", 0),
-            "height": info.get("height", 0),
+            "duration": probe.get("duration") or _safe_int(info.get("duration"), 0),
+            "width": probe.get("width") or _safe_int(info.get("width"), DEFAULT_VIDEO_WIDTH),
+            "height": probe.get("height") or _safe_int(info.get("height"), DEFAULT_VIDEO_HEIGHT),
         }
 
         cleanup_on_error = False
@@ -525,8 +700,6 @@ async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str,
         Exception: If download fails or no media found
 
     """
-    import subprocess
-
     try:
         loop = asyncio.get_running_loop()
         # Run gallery-dl to download content (supports both photos and videos)
