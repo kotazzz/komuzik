@@ -62,7 +62,8 @@ EXCLUSION_HELP = (
     "• `-1,3,8` — не качать 1, 3 и 8\n"
     "• `-1-20` — не качать с 1 по 20 включительно\n"
     "• `-1-10,15,20-30` — диапазоны и отдельные номера\n"
-    "• `+5` — вернуть 5-й обратно в загрузку\n\n"
+    "• `+5` — вернуть 5-й обратно в загрузку\n"
+    "• `+11,13,15` — вернуть 11, 13 и 15\n\n"
     "Номера — как в списке ниже. Можно несколько раз подряд."
 )
 
@@ -82,7 +83,12 @@ def find_playlist_url(text: str) -> tuple[str, bool] | None:
 
 
 def parse_exclusion_ops(ops: str, max_n: int, current: set[int]) -> set[int] | None:
-    """Apply exclusion/inclusion ops. Returns new set or None if invalid."""
+    """Apply exclusion/inclusion ops. Returns new set or None if invalid.
+
+    Sign ``+`` / ``-`` applies to the token and to following bare numbers until
+    another sign appears (e.g. ``+11,13,15`` includes 11, 13 and 15;
+    ``-1,3,8`` excludes 1, 3 and 8). Bare numbers with no prior sign exclude.
+    """
     if not ops or not ops.strip():
         return None
     text = ops.strip()
@@ -93,6 +99,7 @@ def parse_exclusion_ops(ops: str, max_n: int, current: set[int]) -> set[int] | N
         return None
 
     result = set(current)
+    include = False  # default for bare numbers (e.g. ``1,2,3``)
     for raw in text.split(","):
         token = raw.strip()
         if not token:
@@ -104,8 +111,7 @@ def parse_exclusion_ops(ops: str, max_n: int, current: set[int]) -> set[int] | N
             include = False
             body = token[1:].strip()
         else:
-            # Bare numbers mean exclude (e.g. -1,2,5)
-            include = False
+            # Inherit last ``+`` / ``-`` (or default exclude)
             body = token
         if not body:
             return None
