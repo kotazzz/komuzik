@@ -102,13 +102,41 @@ def _format_history_timestamp(timestamp: str | None) -> str:
         return text[:16] if len(text) >= 16 else text
 
 
+def _history_platform_label(platform: str | None) -> str:
+    key = (platform or "").strip().lower()
+    labels = {
+        "youtube": "Ютуб",
+        "youtube_shorts": "Ютуб шортс",
+        "tiktok": "ТикТок",
+        "twitter": "Твиттер",
+        "pinterest": "Пинтерест",
+    }
+    return labels.get(key, platform.strip() if platform else "")
+
+
+def _history_quality_label(fmt: str | None) -> str:
+    key = (fmt or "").strip().lower()
+    qualities = {
+        "high": "высокое",
+        "medium": "среднее",
+        "low": "низкое",
+    }
+    if key in qualities:
+        return qualities[key]
+    return (fmt or "").strip()
+
+
 def _history_type_label(event_type: str | None, video_format: str | None) -> str:
-    fmt = (video_format or "").strip()
+    quality = _history_quality_label(video_format)
     if event_type == "video_download":
-        return f"video {fmt}".strip()
+        return f"видео {quality}".strip()
     if event_type == "audio_download":
-        return f"audio {fmt}".strip()
-    return ""
+        return f"аудио {quality}".strip()
+    if event_type == "tiktok_download":
+        return "видео"
+    if event_type == "pinterest_download":
+        return "медиа"
+    return quality
 
 
 def format_download_history_line(row: dict) -> str:
@@ -119,7 +147,7 @@ def format_download_history_line(row: dict) -> str:
 
     url = row.get("url")
     title = row.get("title")
-    platform = (row.get("platform") or "").strip()
+    platform = _history_platform_label(row.get("platform"))
     type_label = _history_type_label(row.get("event_type"), row.get("video_format"))
     ts = _format_history_timestamp(row.get("timestamp"))
 

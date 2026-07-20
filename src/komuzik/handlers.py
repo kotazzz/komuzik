@@ -592,7 +592,9 @@ class BotHandlers:
             self.stats.save_user_report(user_id, username, db_text)
 
             # Send report to admins (header + 1:1 copy without "forwarded from")
-            header_text = f"📋 **Новый отчет**\nОт: @{username or user_id} (ID: {user_id})"
+            header_text = (
+                f"📋 **Новый отчет**\nОт: @{username or user_id} (номер: {user_id})"
+            )
             user_report_msg_id = int(message_obj.id) if message_obj is not None else 0
 
             for admin_id in self.download_limiter.ADMIN_USER_IDS:
@@ -1951,23 +1953,23 @@ class BotHandlers:
             "🛠 **Админ-панель**\n\n"
             f"Одновременных загрузок: **{concurrent}**\n"
             f"Плейлист / сутки (глобально): **{playlist_limit}**\n"
-            f"Банов: **{ban_count}**\n\n"
-            "Персональный лимит: /setuserlimit <id> N\n"
-            "Сброс: /unsetuserlimit <id>\n"
-            "Бан: /ban <id> причина · /unban <id>"
+            f"Блокировок: **{ban_count}**\n\n"
+            "Персональный лимит: `/setuserlimit <айди> <число>`\n"
+            "Сброс лимита: `/unsetuserlimit <айди>`\n"
+            "Блок: `/ban <айди> причина` · `/unban <айди>`"
         )
 
     def _admin_panel_buttons(self) -> list:
         return [
             [
-                Button.inline("⚙️ Concurrent", data="admin_set_concurrent"),
-                Button.inline("📺 Playlist limit", data="admin_set_playlist"),
+                Button.inline("⚙️ Одновременные", data="admin_set_concurrent"),
+                Button.inline("📺 Лимит плейлиста", data="admin_set_playlist"),
             ],
             [Button.inline("👥 Пользователи", data="admin_users_known_p_0")],
         ]
 
     def _admin_user_profile_link(self, user_id: int) -> str:
-        return f"[профиль](tg://user?id={user_id})"
+        return f"[открыть профиль](tg://user?id={user_id})"
 
     def _truncate_button_label(self, label: str, max_len: int = 60) -> str:
         if len(label) <= max_len:
@@ -2055,13 +2057,13 @@ class BotHandlers:
         lines = [
             "📥 **История загрузок**\n",
             f"👤 {format_user_label(user_record)}",
-            f"ID: `{target_user_id}`",
+            f"Номер: `{target_user_id}`",
             self._admin_user_profile_link(target_user_id),
         ]
 
         ban_reason = self.stats.get_ban(target_user_id)
         if ban_reason:
-            lines.append(f"🚫 **Забанен:** {ban_reason}")
+            lines.append(f"🚫 **Заблокирован:** {ban_reason}")
 
         if total == 0:
             lines.append("\nНет загрузок.")
@@ -2128,7 +2130,7 @@ class BotHandlers:
         match = re.match(r"^/user(?:@\w+)?(?:\s+(.+))?", text)
         target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
         if target_id is None:
-            await event.respond("Использование: /user <user_id>")
+            await event.respond("Пример: `/user 123456789`")
             return
         if not await self._send_admin_history_page(event, target_id, 0):
             await event.respond("Нет данных")
@@ -2149,18 +2151,18 @@ class BotHandlers:
         text = getattr(event.message, "text", None) or ""
         match = re.match(r"^/ban(?:@\w+)?\s+(\d+)\s+(.+)", text, re.DOTALL)
         if not match:
-            await event.respond("Использование: /ban <user_id> <причина>")
+            await event.respond("Пример: `/ban 123456789 причина`")
             return
         target_id = int(match.group(1))
         reason = match.group(2).strip()
         if not reason:
-            await event.respond("Использование: /ban <user_id> <причина>")
+            await event.respond("Пример: `/ban 123456789 причина`")
             return
         if target_id in self.download_limiter.ADMIN_USER_IDS:
-            await event.respond("❌ Нельзя забанить администратора.")
+            await event.respond("❌ Нельзя заблокировать администратора бота.")
             return
         self.stats.ban_user(target_id, reason, banned_by=user_id)
-        await event.respond(f"✅ Пользователь `{target_id}` забанен.\nПричина: {reason}")
+        await event.respond(f"✅ Пользователь `{target_id}` заблокирован.\nПричина: {reason}")
 
     async def unban_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -2169,13 +2171,13 @@ class BotHandlers:
         text = getattr(event.message, "text", None) or ""
         match = re.match(r"^/unban(?:@\w+)?\s+(\d+)", text)
         if not match:
-            await event.respond("Использование: /unban <user_id>")
+            await event.respond("Пример: `/unban 123456789`")
             return
         target_id = int(match.group(1))
         if self.stats.unban_user(target_id):
-            await event.respond(f"✅ Пользователь `{target_id}` разбанен.")
+            await event.respond(f"✅ Пользователь `{target_id}` разблокирован.")
         else:
-            await event.respond(f"ℹ️ Пользователь `{target_id}` не в бане.")
+            await event.respond(f"ℹ️ Пользователь `{target_id}` не был в блокировке.")
 
     async def setconcurrent_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -2185,7 +2187,7 @@ class BotHandlers:
         match = re.match(r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?", text or "")
         n = self._parse_positive_int(match.group(1) if match else None)
         if n is None:
-            await event.respond("Использование: /setconcurrent N (N ≥ 1)")
+            await event.respond("Пример: `/setconcurrent 3` (число ≥ 1)")
             return
         self.stats.set_max_concurrent(n)
         _ = self.download_limiter.get_max_per_user()
@@ -2199,7 +2201,7 @@ class BotHandlers:
         match = re.match(r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?", text or "")
         n = self._parse_positive_int(match.group(1) if match else None)
         if n is None:
-            await event.respond("Использование: /setplaylistlimit N (N ≥ 1)")
+            await event.respond("Пример: `/setplaylistlimit 50` (число ≥ 1)")
             return
         self.stats.set_playlist_daily_limit(n)
         await event.respond(f"✅ Плейлист / сутки (глобально): **{n}**")
@@ -2213,12 +2215,12 @@ class BotHandlers:
         args = (match.group(1) or "").strip() if match else ""
         parts = args.split()
         if len(parts) != 2:
-            await event.respond("Использование: /setuserlimit <user_id> N (N ≥ 1)")
+            await event.respond("Пример: `/setuserlimit 123456789 100` (число ≥ 1)")
             return
         target_id = self._parse_positive_int(parts[0])
         n = self._parse_positive_int(parts[1])
         if target_id is None or n is None:
-            await event.respond("Использование: /setuserlimit <user_id> N (N ≥ 1)")
+            await event.respond("Пример: `/setuserlimit 123456789 100` (число ≥ 1)")
             return
         self.stats.set_user_playlist_limit(target_id, n)
         limit = self.stats.get_user_playlist_limit(target_id)
@@ -2232,7 +2234,7 @@ class BotHandlers:
         match = re.match(r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?", text or "")
         target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
         if target_id is None:
-            await event.respond("Использование: /unsetuserlimit <user_id>")
+            await event.respond("Пример: `/unsetuserlimit 123456789`")
             return
         self.stats.clear_user_playlist_limit(target_id)
         await event.respond(f"✅ Персональный лимит для `{target_id}` сброшен.")
@@ -2261,7 +2263,7 @@ class BotHandlers:
 
         n = int(stripped)
         if n < 1:
-            await event.respond("❌ N должно быть ≥ 1.")
+            await event.respond("❌ Число должно быть ≥ 1.")
             return True
 
         ADMIN_PENDING.pop(user_id, None)
@@ -2296,7 +2298,7 @@ class BotHandlers:
             )
             return
         self.stats.set_storage_chat_id(int(chat_id))
-        await event.respond(f"✅ Эта группа — хранилище бота.\nchat_id=`{chat_id}`")
+        await event.respond(f"✅ Эта группа — хранилище бота.\nНомер чата: `{chat_id}`")
 
     async def unsetstorage_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -2396,7 +2398,11 @@ class BotHandlers:
                 await event.answer("Нет доступа.", alert=True)
                 return
             ADMIN_PENDING[user_id] = "concurrent" if data == "admin_set_concurrent" else "playlist"
-            label = "concurrent" if data == "admin_set_concurrent" else "плейлист / сутки"
+            label = (
+                "одновременных загрузок"
+                if data == "admin_set_concurrent"
+                else "плейлист / сутки"
+            )
             await event.answer()
             await event.respond(f"Введите новое значение ({label}), целое число ≥ 1:")
             return

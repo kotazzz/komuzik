@@ -148,7 +148,7 @@ def test_format_download_history_line_with_link():
     line = format_download_history_line(row)
     assert line.startswith("• [My Video clip]")
     assert "(https://youtube.com/watch?v=abc)" in line
-    assert "youtube · video 720p" in line
+    assert "Ютуб · видео 720p" in line
 
 
 def test_format_download_history_line_without_link():
@@ -162,7 +162,7 @@ def test_format_download_history_line_without_link():
         "timestamp": "2026-07-20 13:10:00",
     }
     line = format_download_history_line(row)
-    assert line.startswith("• youtube · audio high")
+    assert line.startswith("• Ютуб · аудио высокое")
 
 
 def test_format_download_history_line_failed():
