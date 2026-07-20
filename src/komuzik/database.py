@@ -143,6 +143,23 @@ class Database:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_playlist_limits (
+                user_id INTEGER PRIMARY KEY,
+                daily_limit INTEGER NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS playlist_usage (
+                user_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, day)
+            )
+        """)
+
         self._ensure_column(cursor, "user_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "chat_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "user_settings", "last_mode", "TEXT")

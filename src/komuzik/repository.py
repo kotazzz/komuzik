@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from .database import Database
+from .timeutil import today_msk
 
 logger = logging.getLogger(__name__)
 
@@ -893,3 +894,135 @@ class StatsRepository:
         except Exception as e:
             logger.error(f"Failed to clear storage_chat_id: {e}")
             raise
+
+    # === Bot config (limits) ===
+
+    MAX_CONCURRENT_KEY = "max_concurrent_per_user"
+    PLAYLIST_DAILY_LIMIT_KEY = "playlist_daily_limit"
+    DEFAULT_PLAYLIST_DAILY_LIMIT = 50
+
+    def get_bot_config_int(self, key: str, default: int) -> int:
+        try:
+            row = self.db.fetchone(
+                "SELECT value FROM bot_config WHERE key = ?",
+                (key,),
+            )
+            if not row or row[0] is None:
+                return default
+            return int(row[0])
+        except Exception as e:
+            logger.error(f"Failed to get bot_config key {key}: {e}")
+            return default
+
+    def set_bot_config_int(self, key: str, value: int) -> None:
+        try:
+            self.db.execute(
+                """INSERT INTO bot_config(key, value) VALUES(?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (key, str(int(value))),
+            )
+        except Exception as e:
+            logger.error(f"Failed to set bot_config key {key}: {e}")
+            raise
+
+    def get_playlist_daily_limit(self) -> int:
+        return self.get_bot_config_int(
+            self.PLAYLIST_DAILY_LIMIT_KEY,
+            self.DEFAULT_PLAYLIST_DAILY_LIMIT,
+        )
+
+    def set_playlist_daily_limit(self, n: int) -> None:
+        self.set_bot_config_int(self.PLAYLIST_DAILY_LIMIT_KEY, n)
+
+    def get_max_concurrent(self, *, default: int = 1) -> int:
+        value = self.get_bot_config_int(self.MAX_CONCURRENT_KEY, default)
+        row = self.db.fetchone(
+            "SELECT value FROM bot_config WHERE key = ?",
+            (self.MAX_CONCURRENT_KEY,),
+        )
+        if not row or row[0] is None:
+            self.set_bot_config_int(self.MAX_CONCURRENT_KEY, value)
+        return value
+
+    def set_max_concurrent(self, n: int) -> None:
+        self.set_bot_config_int(self.MAX_CONCURRENT_KEY, n)
+
+    def get_user_playlist_limit(self, user_id: int) -> int | None:
+        try:
+            row = self.db.fetchone(
+                "SELECT daily_limit FROM user_playlist_limits WHERE user_id = ?",
+                (user_id,),
+            )
+            if not row or row[0] is None:
+                return None
+            return int(row[0])
+        except Exception as e:
+            logger.error(f"Failed to get user playlist limit for {user_id}: {e}")
+            return None
+
+    def set_user_playlist_limit(self, user_id: int, n: int) -> None:
+        try:
+            self.db.execute(
+                """INSERT INTO user_playlist_limits (user_id, daily_limit, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     daily_limit = excluded.daily_limit,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (user_id, int(n)),
+            )
+        except Exception as e:
+            logger.error(f"Failed to set user playlist limit for {user_id}: {e}")
+            raise
+
+    def clear_user_playlist_limit(self, user_id: int) -> None:
+        try:
+            self.db.execute(
+                "DELETE FROM user_playlist_limits WHERE user_id = ?",
+                (user_id,),
+            )
+        except Exception as e:
+            logger.error(f"Failed to clear user playlist limit for {user_id}: {e}")
+            raise
+
+    def get_playlist_usage(self, user_id: int, day: str | None = None) -> int:
+        day_key = day if day is not None else today_msk()
+        try:
+            row = self.db.fetchone(
+                "SELECT count FROM playlist_usage WHERE user_id = ? AND day = ?",
+                (user_id, day_key),
+            )
+            if not row or row[0] is None:
+                return 0
+            return int(row[0])
+        except Exception as e:
+            logger.error(f"Failed to get playlist usage for {user_id} on {day_key}: {e}")
+            return 0
+
+    def increment_playlist_usage(self, user_id: int, amount: int = 1) -> None:
+        day_key = today_msk()
+        try:
+            self.db.execute(
+                """INSERT INTO playlist_usage (user_id, day, count)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, day) DO UPDATE SET
+                     count = count + excluded.count""",
+                (user_id, day_key, int(amount)),
+            )
+        except Exception as e:
+            logger.error(f"Failed to increment playlist usage for {user_id}: {e}")
+            raise
+
+    def effective_playlist_limit(self, user_id: int, *, is_admin: bool) -> int | None:
+        if is_admin:
+            return None
+        user_limit = self.get_user_playlist_limit(user_id)
+        if user_limit is not None:
+            return user_limit
+        return self.get_playlist_daily_limit()
+
+    def remaining_playlist_quota(self, user_id: int, *, is_admin: bool) -> int | None:
+        effective = self.effective_playlist_limit(user_id, is_admin=is_admin)
+        if effective is None:
+            return None
+        usage = self.get_playlist_usage(user_id)
+        return max(0, effective - usage)
