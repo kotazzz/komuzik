@@ -35,7 +35,6 @@ from .downloaders import (
     send_playlist_album,
     send_video_content,
 )
-from .storage import copy_messages_to_chat, delete_staging, stage_media
 from .inline_media import (
     PM_UNAVAILABLE_MESSAGE,
     delete_staging_message,
@@ -57,6 +56,7 @@ from .playlist import (
 )
 from .repository import StatsRepository
 from .stats_infographic import get_stats_image
+from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 
 logger = logging.getLogger(__name__)
 
@@ -868,16 +868,43 @@ class BotHandlers:
                             **caption_kw,
                         )
                         staging.append(msg)
+                    remaining = [
+                        m
+                        for m in staging
+                        if m is not None and getattr(m, "media", None) is not None
+                    ]
+                    delivered = 0
                     try:
-                        await copy_messages_to_chat(self.client, event.chat_id, staging)
-                    except Exception:
+                        delivered += await copy_messages_to_chat(
+                            self.client, event.chat_id, remaining
+                        )
+                        remaining = []
+                    except PartialCopyError as e:
+                        delivered += e.sent
+                        remaining = remaining[e.sent:]
                         try:
-                            await copy_messages_to_chat(self.client, event.chat_id, staging)
-                        except Exception:
-                            for msg in staging:
-                                await copy_messages_to_chat(self.client, event.chat_id, [msg])
-                    sent += len(batch)
-                    self.stats.set_user_last_format(user_id, "audio", quality)
+                            delivered += await copy_messages_to_chat(
+                                self.client, event.chat_id, remaining
+                            )
+                            remaining = []
+                        except PartialCopyError as e2:
+                            delivered += e2.sent
+                            remaining = remaining[e2.sent:]
+                            for msg in remaining:
+                                try:
+                                    delivered += await copy_messages_to_chat(
+                                        self.client, event.chat_id, [msg]
+                                    )
+                                except PartialCopyError as e3:
+                                    if e3.sent:
+                                        delivered += e3.sent
+                                    logger.error(
+                                        "Playlist track delivery failed after retries: %s",
+                                        e3.__cause__,
+                                    )
+                    if delivered:
+                        sent += delivered
+                        self.stats.set_user_last_format(user_id, "audio", quality)
                 except Exception as e:
                     logger.error(f"Playlist batch send failed: {e}")
                     try:
@@ -1675,6 +1702,10 @@ class BotHandlers:
         try:
             await self.client.delete_messages(chat_id, [probe.id])
         except Exception as e:
+            try:
+                await self.client.delete_messages(chat_id, [probe.id])
+            except Exception:
+                pass
             await event.respond(
                 f"❌ Не могу удалять сообщения в этой группе ({e!s}). "
                 "Дай боту право удалять сообщения и повтори /setstorage."

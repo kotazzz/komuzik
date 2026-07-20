@@ -68,13 +68,32 @@ async def stage_media(
     return await client.send_file(storage_chat_id, file_path, caption=caption)
 
 
-async def copy_messages_to_chat(client: Any, dest_chat_id: int, messages: list) -> None:
-    """Re-send media by file_id without a Forwarded-from header."""
+class PartialCopyError(Exception):
+    """Raised when copy stops mid-batch; ``sent`` is the count already delivered."""
+
+    def __init__(self, sent: int, cause: BaseException):
+        self.sent = sent
+        super().__init__(str(cause))
+        self.__cause__ = cause
+
+
+async def copy_messages_to_chat(client: Any, dest_chat_id: int, messages: list) -> int:
+    """Re-send media by file_id without a Forwarded-from header.
+
+    Returns the number successfully copied. Raises ``PartialCopyError`` on first
+    failure after any partial progress (those messages are already delivered).
+    """
+    sent = 0
     for msg in messages:
         if msg is None or msg.media is None:
             continue
         caption = msg.message or ""
-        await client.send_file(dest_chat_id, msg.media, caption=caption)
+        try:
+            await client.send_file(dest_chat_id, msg.media, caption=caption)
+            sent += 1
+        except Exception as e:
+            raise PartialCopyError(sent, e) from e
+    return sent
 
 
 async def delete_staging(client: Any, storage_chat_id: int, messages: list) -> None:
