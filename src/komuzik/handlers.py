@@ -223,6 +223,17 @@ class BotHandlers:
         self._track_user(event)
         await event.respond(MSG_HELP)
 
+    async def _count_bot_groups(self) -> int:
+        """Count groups/supergroups the bot is currently in."""
+        count = 0
+        try:
+            async for dialog in self.client.iter_dialogs():
+                if bool(getattr(dialog, "is_group", False)):
+                    count += 1
+        except Exception as e:
+            logger.error(f"Failed to count bot groups: {e}")
+        return count
+
     async def settings_handler(self, event: Message):
         """Handle /settings command."""
         self._track_user(event)
@@ -789,6 +800,7 @@ class BotHandlers:
 
         try:
             stats = self.stats.get_statistics(period)
+            stats["total_groups"] = await self._count_bot_groups()
             period_names = {"day": "за день", "month": "за месяц", "all": "за всё время"}
             period_name = period_names.get(period, period)
 
@@ -797,11 +809,16 @@ class BotHandlers:
             total = int(stats.get("total_downloads") or 0)
             ok = int(stats.get("successful_downloads") or 0)
             success_pct = round(100 * ok / total) if total else 0
+            by_source = stats.get("by_source") or {}
             caption = (
                 f"📊 Komuzik {period_name}\n"
                 f"👥 {stats.get('total_users', 0)} · "
+                f"💬 {stats.get('total_groups', 0)} · "
                 f"📥 {total} · "
-                f"✅ {success_pct}%"
+                f"✅ {success_pct}%\n"
+                f"ЛС {by_source.get('dm', 0)} · "
+                f"Inline {by_source.get('inline', 0)} · "
+                f"Группы {by_source.get('group', 0)}"
             )
 
             buttons = [

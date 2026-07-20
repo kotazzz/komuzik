@@ -304,6 +304,7 @@ class StatsRepository:
             "error_count": self._get_error_count(date_filter),
             "by_source": self._get_download_breakdown_by_source(date_filter),
             "by_content": self._get_download_breakdown_by_content(date_filter),
+            "total_groups": 0,
         }
 
         return stats
@@ -414,14 +415,14 @@ class StatsRepository:
         return result[0] if result else 0
 
     def _get_download_breakdown_by_source(self, date_filter: str) -> dict[str, int]:
-        """Count downloads by source (dm/inline). Missing source counts as dm."""
+        """Count downloads by source (dm/inline/group). Missing source counts as dm."""
         query = f"""SELECT COALESCE(source, 'dm') AS src, COUNT(*) as count
                     FROM statistics
                     WHERE {self._download_event_filter()}
                     {date_filter}
                     GROUP BY COALESCE(source, 'dm')"""
         rows = self.db.fetchall(query, DOWNLOAD_EVENT_TYPES)
-        result = {"dm": 0, "inline": 0}
+        result = {"dm": 0, "inline": 0, "group": 0}
         for row in rows or []:
             key = row[0] if row[0] in result else "dm"
             result[key] = row[1]

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 300
-CACHE_VERSION = "v2"
+CACHE_VERSION = "v3"
 CACHE_DIR = Path("data/stats_cache")
 
 # Landscape canvas
@@ -50,6 +50,7 @@ ICON_COMMENT = "\uf075"
 ICON_FILM = "\uf008"
 ICON_HEADPHONES = "\uf025"
 ICON_CHART = "\uf080"
+ICON_GROUP = "\uf86d"
 
 FORMAT_COLORS = [BLUE, TEAL, AMBER, PINK, CORAL, (129, 140, 248), (251, 113, 133)]
 
@@ -238,9 +239,10 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     by_content = stats.get("by_content") or {}
     dm = int(by_source.get("dm") or 0)
     inline = int(by_source.get("inline") or 0)
+    group = int(by_source.get("group") or 0)
     video_n = int(by_content.get("video") or 0)
     audio_n = int(by_content.get("audio") or 0)
-    src_total = max(dm + inline, 1)
+    src_total = max(dm + inline + group, 1)
     cont_total = max(video_n + audio_n, 1)
 
     video_formats = list(stats.get("popular_video_formats") or [])[:5]
@@ -257,11 +259,12 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     )
     y += 64
 
-    # KPI row
-    card_w = (WIDTH - 2 * PADDING - 3 * GAP) // 4
+    # KPI row (5 cards)
+    card_w = (WIDTH - 2 * PADDING - 4 * GAP) // 5
     card_h = 100
     kpis = [
         (ICON_USERS, "Пользователи", _fmt_int(int(stats.get("total_users") or 0)), TEAL),
+        (ICON_GROUP, "Группы", _fmt_int(int(stats.get("total_groups") or 0)), PINK),
         (ICON_SEARCH, "Поиски", _fmt_int(int(stats.get("total_searches") or 0)), BLUE),
         (ICON_DOWNLOAD, "Загрузки", _fmt_int(total), AMBER),
         (ICON_CHECK, "Успех", f"{success_pct}%", GREEN),
@@ -355,7 +358,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         left_cx,
         cy,
         88,
-        [("ЛС", dm, BLUE), ("Inline", inline, TEAL)],
+        [("ЛС", dm, BLUE), ("Inline", inline, TEAL), ("Группы", group, PINK)],
         CARD,
     )
     _draw_donut(
@@ -363,7 +366,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         right_cx,
         cy,
         88,
-        [("Видео", video_n, AMBER), ("Аудио", audio_n, PINK)],
+        [("Видео", video_n, AMBER), ("Аудио", audio_n, CORAL)],
         CARD,
     )
     # center icons
@@ -379,15 +382,18 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         font=_font(24),
         fill=AMBER,
     )
-    small = _font(20)
+    small = _font(18)
+    dm_pct = round(100 * dm / src_total)
+    inline_pct = round(100 * inline / src_total)
+    group_pct = round(100 * group / src_total)
     draw.text(
-        (left_cx - 110, col_top + 250),
-        f"ЛС {round(100 * dm / src_total)}%  ·  Inline {round(100 * inline / src_total)}%",
+        (left_cx - 130, col_top + 248),
+        f"ЛС {dm_pct}% · Inline {inline_pct}% · Группы {group_pct}%",
         font=small,
         fill=MUTED,
     )
     draw.text(
-        (right_cx - 120, col_top + 250),
+        (right_cx - 120, col_top + 248),
         f"Видео {round(100 * video_n / cont_total)}%  ·  "
         f"Аудио {round(100 * audio_n / cont_total)}%",
         font=small,
