@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from telethon import Button, events
+from telethon.errors import QueryIdInvalidError
 from telethon.tl.custom import Message
 from telethon.tl.types import UpdateBotInlineSend
 
@@ -32,13 +33,11 @@ from .downloaders import (
     download_youtube_video,
     enrich_youtube_search_stats,
     get_available_formats,
-    get_media_preview,
     search_youtube,
     send_audio_content,
     send_image_content,
     send_playlist_album,
     send_video_content,
-    youtube_thumbnail_url,
 )
 from .help_pages import (
     INFO_GITHUB_URL,
@@ -63,7 +62,6 @@ from .inline_media import (
     stage_media_to_user,
 )
 from .inline_query import ParsedInlineQuery, parse_inline_query
-from .inline_thumbs import input_web_thumb
 from .playlist import (
     PLAYLIST_BATCH_SIZE,
     PLAYLIST_PAGE_SIZE,
@@ -94,7 +92,7 @@ PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
 SEARCH_SESSIONS: dict[str, dict[str, Any]] = {}
-INLINE_SEARCH_MAX = 8  # keep under Telegram inline answer deadline
+INLINE_SEARCH_MAX = 5
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -2865,204 +2863,206 @@ class BotHandlers:
         match = YOUTUBE_REGEX.search(url)
         if not match:
             return None
-        # last capturing group in YOUTUBE_REGEX is the 11-char id
         for group in reversed(match.groups()):
             if isinstance(group, str) and re.fullmatch(r"[\w-]{11}", group):
                 return group
         return None
 
-    def _inline_thumb_url(self, *, video_id: str | None = None, fallback: str | None = None) -> str | None:
-        """Prefer stable i.ytimg.com/hqdefault — signed hq720 URLs often break Telegram thumbs."""
-        stable = youtube_thumbnail_url(video_id)
-        if stable:
-            return stable
-        if isinstance(fallback, str) and fallback.startswith("http"):
-            return fallback.split("?", 1)[0]
-        return None
-
-    async def _answer_inline_articles(
-        self, event, articles: list, *, gallery: bool = False
-    ) -> None:
-        """Answer inline query; retry without gallery/thumbs if Telegram rejects."""
+    async def _safe_inline_answer(self, event, articles: list, *, gallery: bool = False) -> None:
+        """Answer inline query; ignore stale query_id and log other failures."""
         try:
             await event.answer(articles, cache_time=0, gallery=gallery)
-            return
+        except QueryIdInvalidError:
+            logger.info("Inline answer skipped: query_id already invalid (user typed further)")
         except Exception as e:
-            logger.warning(f"Inline answer failed (gallery={gallery}): {e}")
-        try:
-            await event.answer(articles, cache_time=0, gallery=False)
-            return
-        except Exception as e:
-            logger.warning(f"Inline answer retry without gallery failed: {e}")
-        # Last resort: rebuild without thumbs is hard here; send a single hint
-        builder = event.builder
-        hint = await builder.article(
-            title="Не удалось показать результаты",
-            description="Попробуйте ещё раз или откройте /search в ЛС",
-            text="Inline-выдача временно недоступна. Напишите боту /search в личке.",
-            id="inline_fail",
-        )
-        await event.answer([hint], cache_time=0)
+            logger.warning(f"Inline answer failed: {e}")
+            try:
+                await event.answer(articles, cache_time=0, gallery=False)
+            except QueryIdInvalidError:
+                logger.info("Inline retry skipped: stale query_id")
+            except Exception as e2:
+                logger.error(f"Inline answer retry failed: {e2}")
 
     async def inline_query_handler(self, event):
-        """Answer inline queries: URL download or YouTube text search."""
+        """Answer inline queries: URL download or YouTube text search.
+
+        Keep this path fast: Telegram cancels unanswered queries in ~1–2s while typing.
+        No network metadata/thumbs before answer — they routinely blow the deadline.
+        """
+        t0 = asyncio.get_running_loop().time()
         query_text = event.text or ""
         user_id = cast("int | None", event.sender_id)
-        if user_id is not None and not self._is_bot_admin(user_id):
-            reason = self.stats.get_ban(user_id)
-            if reason is not None:
-                builder = event.builder
-                blocked = await builder.article(
-                    title="🚫 Доступ ограничен",
-                    description=reason[:64],
-                    text=format_ban_message(reason),
-                    id="banned",
-                )
-                await event.answer([blocked], cache_time=0)
-                return
-
-        default_quality = "720p"
-        username = None
-        if user_id is not None:
-            default_quality = self.stats.get_user_settings(user_id).default_quality
-            sender = getattr(event, "sender", None)
-            username = getattr(sender, "username", None) if sender else None
-
-        parsed = parse_inline_query(query_text, default_quality=default_quality)
-        builder = event.builder
-
-        if parsed:
-            token = uuid.uuid4().hex[:16]
-            INLINE_JOBS[token] = parsed
-            # Fast path: stable thumb from id; title with short timeout
-            video_id = self._youtube_id_from_url(parsed.url)
-            thumb_url = self._inline_thumb_url(video_id=video_id)
-            title = parsed.description
-            try:
-                title, preview_thumb = await asyncio.wait_for(
-                    get_media_preview(parsed.url, fallback=parsed.description),
-                    timeout=2.5,
-                )
-                if not thumb_url:
-                    thumb_url = self._inline_thumb_url(
-                        video_id=video_id, fallback=preview_thumb
-                    )
-            except TimeoutError:
-                logger.info(f"Inline preview timeout for {parsed.url}")
-            except Exception as e:
-                logger.warning(f"Inline preview failed for {parsed.url}: {e}")
-
-            thumb = input_web_thumb(thumb_url) if thumb_url else None
-            result = await builder.article(
-                title=title,
-                description=parsed.description,
-                text="⏳ Загрузка…",
-                buttons=[Button.inline("⏳", b"noop")],
-                id=token,
-                thumb=thumb,
-            )
-            await self._answer_inline_articles(event, [result], gallery=False)
-            return
-
-        query = query_text.strip()
-        if not query:
-            hint = await builder.article(
-                title="Ссылка или поисковый запрос",
-                description="YouTube / TikTok / X / Pinterest · или текст поиска",
-                text=(
-                    "После @бота укажите ссылку или текст для поиска на YouTube.\n"
-                    "Ссылка: `music` / `480` + URL. Поиск: просто слова.\n"
-                    "Сначала напишите боту /start в ЛС."
-                ),
-                buttons=[Button.inline("⏳", b"noop")],
-                id="hint",
-            )
-            await event.answer([hint], cache_time=0)
-            return
-
-        if user_id is not None:
-            self.stats.track_user(user_id, username)
-            self.stats.track_search(user_id, username)
+        logger.info(f"Inline query user={user_id} text={query_text!r}")
 
         try:
-            results = await asyncio.wait_for(
-                search_youtube(query, max_results=INLINE_SEARCH_MAX),
-                timeout=4.0,
-            )
-        except TimeoutError:
-            logger.warning(f"Inline search timed out for query={query!r}")
-            slow = await builder.article(
-                title="Поиск слишком долгий",
-                description="Откройте /search в личке с ботом",
-                text="YouTube отвечает медленно. Используйте /search в ЛС или повторите запрос.",
-                buttons=[Button.inline("⏳", b"noop")],
-                id="search_timeout",
-            )
-            await event.answer([slow], cache_time=0)
-            return
+            if user_id is not None and not self._is_bot_admin(user_id):
+                reason = self.stats.get_ban(user_id)
+                if reason is not None:
+                    builder = event.builder
+                    blocked = await builder.article(
+                        title="🚫 Доступ ограничен",
+                        description=reason[:64],
+                        text=format_ban_message(reason),
+                        id="banned",
+                    )
+                    await self._safe_inline_answer(event, [blocked])
+                    return
 
-        if not results:
-            empty = await builder.article(
-                title="Ничего не найдено",
-                description="Попробуйте другой запрос",
-                text="По этому запросу ничего не нашлось. Измените формулировку.",
-                buttons=[Button.inline("⏳", b"noop")],
-                id="search_empty",
-            )
-            await event.answer([empty], cache_time=0)
-            return
+            default_quality = "720p"
+            if user_id is not None:
+                try:
+                    default_quality = self.stats.get_user_settings(user_id).default_quality
+                except Exception:
+                    pass
 
-        articles = []
-        for item in results:
-            url = str(item.get("url") or "")
-            job = parse_inline_query(url, default_quality=default_quality)
-            if job is None:
-                continue
-            token = uuid.uuid4().hex[:16]
-            INLINE_JOBS[token] = job
+            parsed = parse_inline_query(query_text, default_quality=default_quality)
+            builder = event.builder
 
-            title = str(item.get("title") or "Без названия")
-            if len(title) > 64:
-                title = title[:61] + "..."
-
-            duration = int(item["duration"]) if item.get("duration") else 0
-            duration_label = f"{duration // 60}:{duration % 60:02d}" if duration else "?:??"
-            channel = str(item.get("channel") or "")
-            desc_parts = [p for p in (channel, duration_label, default_quality) if p]
-            description = " · ".join(desc_parts)
-            if len(description) > 64:
-                description = description[:61] + "..."
-
-            vid = item.get("id") if isinstance(item.get("id"), str) else None
-            thumb_url = self._inline_thumb_url(
-                video_id=vid,
-                fallback=item.get("thumbnail") if isinstance(item.get("thumbnail"), str) else None,
-            )
-            thumb = input_web_thumb(thumb_url) if thumb_url else None
-
-            articles.append(
-                await builder.article(
-                    title=title,
-                    description=description,
+            # --- URL / link path: answer immediately, no yt-dlp metadata ---
+            if parsed:
+                token = uuid.uuid4().hex[:16]
+                INLINE_JOBS[token] = parsed
+                title = parsed.description
+                # Prefer human-looking title from URL id without network
+                vid = self._youtube_id_from_url(parsed.url)
+                if vid:
+                    title = f"YouTube · {parsed.quality}" if parsed.platform == "youtube" else parsed.description
+                result = await builder.article(
+                    title=title[:64],
+                    description=(parsed.url[:64] if parsed.url else parsed.description),
                     text="⏳ Загрузка…",
                     buttons=[Button.inline("⏳", b"noop")],
                     id=token,
-                    thumb=thumb,
                 )
-            )
+                await self._safe_inline_answer(event, [result])
+                logger.info(
+                    f"Inline URL answered in {asyncio.get_running_loop().time() - t0:.2f}s"
+                )
+                return
 
-        if not articles:
-            empty = await builder.article(
-                title="Ничего не найдено",
-                description="Попробуйте другой запрос",
-                text="По этому запросу ничего не нашлось. Измените формулировку.",
-                buttons=[Button.inline("⏳", b"noop")],
-                id="search_empty",
-            )
-            await event.answer([empty], cache_time=0)
-            return
+            query = query_text.strip()
+            if not query:
+                hint = await builder.article(
+                    title="Ссылка или поисковый запрос",
+                    description="YouTube / TikTok / X / Pinterest · или текст поиска",
+                    text=(
+                        "После @бота укажите ссылку или текст для поиска на YouTube.\n"
+                        "Ссылка: `music` / `480` + URL. Поиск: просто слова.\n"
+                        "Сначала напишите боту /start в ЛС."
+                    ),
+                    buttons=[Button.inline("⏳", b"noop")],
+                    id="hint",
+                )
+                await self._safe_inline_answer(event, [hint])
+                return
 
-        await self._answer_inline_articles(event, articles, gallery=True)
+            # Too-short queries: don't hit YouTube on every keystroke
+            if len(query) < 3:
+                hint = await builder.article(
+                    title="Продолжите ввод…",
+                    description="Нужно минимум 3 символа для поиска",
+                    text="Введите ещё символы или вставьте ссылку.",
+                    id="hint_short",
+                )
+                await self._safe_inline_answer(event, [hint])
+                return
+
+            if user_id is not None:
+                try:
+                    sender = getattr(event, "sender", None)
+                    username = getattr(sender, "username", None) if sender else None
+                    self.stats.track_user(user_id, username)
+                    self.stats.track_search(user_id, username)
+                except Exception:
+                    pass
+
+            try:
+                results = await asyncio.wait_for(
+                    search_youtube(query, max_results=INLINE_SEARCH_MAX),
+                    timeout=2.8,
+                )
+            except TimeoutError:
+                logger.warning(f"Inline search timeout query={query!r}")
+                slow = await builder.article(
+                    title="Поиск не успел",
+                    description="Напишите /search в ЛС",
+                    text="YouTube отвечает медленно для inline. Используйте /search в личке.",
+                    id="search_timeout",
+                )
+                await self._safe_inline_answer(event, [slow])
+                return
+
+            if not results:
+                empty = await builder.article(
+                    title="Ничего не найдено",
+                    description="Попробуйте другой запрос",
+                    text="По этому запросу ничего не нашлось.",
+                    id="search_empty",
+                )
+                await self._safe_inline_answer(event, [empty])
+                return
+
+            articles = []
+            for item in results:
+                url = str(item.get("url") or "")
+                job = parse_inline_query(url, default_quality=default_quality)
+                if job is None:
+                    continue
+                token = uuid.uuid4().hex[:16]
+                INLINE_JOBS[token] = job
+
+                title = str(item.get("title") or "Без названия")
+                if len(title) > 64:
+                    title = title[:61] + "..."
+
+                duration = int(item["duration"]) if item.get("duration") else 0
+                duration_label = (
+                    f"{duration // 60}:{duration % 60:02d}" if duration else "?:??"
+                )
+                channel = str(item.get("channel") or "")
+                description = " · ".join(
+                    p for p in (channel, duration_label, default_quality) if p
+                )[:64]
+
+                articles.append(
+                    await builder.article(
+                        title=title,
+                        description=description,
+                        text="⏳ Загрузка…",
+                        buttons=[Button.inline("⏳", b"noop")],
+                        id=token,
+                    )
+                )
+
+            if not articles:
+                empty = await builder.article(
+                    title="Ничего не найдено",
+                    description="Попробуйте другой запрос",
+                    text="По этому запросу ничего не нашлось.",
+                    id="search_empty",
+                )
+                await self._safe_inline_answer(event, [empty])
+                return
+
+            await self._safe_inline_answer(event, articles, gallery=False)
+            logger.info(
+                f"Inline search answered n={len(articles)} "
+                f"in {asyncio.get_running_loop().time() - t0:.2f}s query={query!r}"
+            )
+        except QueryIdInvalidError:
+            logger.info("Inline handler: stale query_id")
+        except Exception:
+            logger.exception(f"Inline handler crashed text={query_text!r}")
+            try:
+                fail = await event.builder.article(
+                    title="Ошибка inline",
+                    description="Попробуйте /search в ЛС",
+                    text="Не удалось обработать inline-запрос.",
+                    id="inline_crash",
+                )
+                await self._safe_inline_answer(event, [fail])
+            except Exception:
+                pass
 
     async def chosen_inline_handler(self, event: UpdateBotInlineSend):
         """Download media after user picks an inline result and edit the via-message."""
