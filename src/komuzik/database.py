@@ -160,6 +160,15 @@ class Database:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_bans (
+                user_id INTEGER PRIMARY KEY,
+                reason TEXT NOT NULL,
+                banned_by INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         self._ensure_column(cursor, "user_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "chat_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "user_settings", "last_mode", "TEXT")

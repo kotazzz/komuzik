@@ -1026,3 +1026,60 @@ class StatsRepository:
             return None
         usage = self.get_playlist_usage(user_id)
         return max(0, effective - usage)
+
+    # === User bans ===
+
+    def get_ban(self, user_id: int) -> str | None:
+        """Return ban reason for user_id or None if not banned."""
+        try:
+            row = self.db.fetchone(
+                "SELECT reason FROM user_bans WHERE user_id = ?",
+                (user_id,),
+            )
+            if not row or row[0] is None:
+                return None
+            return str(row[0])
+        except Exception as e:
+            logger.error(f"Failed to get ban for {user_id}: {e}")
+            return None
+
+    def is_banned(self, user_id: int) -> bool:
+        """Return whether user_id is currently banned."""
+        return self.get_ban(user_id) is not None
+
+    def ban_user(self, user_id: int, reason: str, banned_by: int | None = None) -> None:
+        """Ban user or update reason on re-ban."""
+        try:
+            self.db.execute(
+                """INSERT INTO user_bans (user_id, reason, banned_by, created_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     reason = excluded.reason,
+                     banned_by = excluded.banned_by,
+                     created_at = CURRENT_TIMESTAMP""",
+                (user_id, reason, banned_by),
+            )
+        except Exception as e:
+            logger.error(f"Failed to ban user {user_id}: {e}")
+            raise
+
+    def unban_user(self, user_id: int) -> bool:
+        """Remove ban. Returns True if a row was deleted."""
+        try:
+            cursor = self.db.execute(
+                "DELETE FROM user_bans WHERE user_id = ?",
+                (user_id,),
+            )
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to unban user {user_id}: {e}")
+            raise
+
+    def count_bans(self) -> int:
+        """Return total number of active bans."""
+        try:
+            row = self.db.fetchone("SELECT COUNT(*) FROM user_bans")
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Failed to count bans: {e}")
+            return 0
