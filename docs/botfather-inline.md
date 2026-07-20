@@ -15,7 +15,7 @@
 Placeholder (текст в поле ввода после `@bot`):
 
 ```
-ссылка или music/480 + ссылка
+ссылка, music/480 + ссылка или поиск
 ```
 
 ## 2. Включить inline feedback
@@ -33,5 +33,5 @@ Placeholder (текст в поле ввода после `@bot`):
 ## 3. Проверка
 
 1. Пользователь хотя бы раз написал боту `/start`.
-2. В любом чате: `@komuzik_bot https://youtube.com/watch?v=...`
+2. В любом чате: `@komuzik_bot https://youtube.com/watch?v=...` или `@komuzik_bot never gonna give you up`
 3. Выбрать пункт → сначала «⏳ Загрузка…», затем видео; в ЛС staging-файл должен исчезнуть.

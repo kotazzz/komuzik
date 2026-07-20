@@ -2719,7 +2719,7 @@ class BotHandlers:
         await event.answer("Сохранено")
 
     async def inline_query_handler(self, event):
-        """Answer inline queries with a placeholder article for supported links."""
+        """Answer inline queries: URL download or YouTube text search."""
         query_text = event.text or ""
         user_id = cast("int | None", event.sender_id)
         if user_id is not None and not self._is_bot_admin(user_id):
@@ -2736,18 +2736,37 @@ class BotHandlers:
                 return
 
         default_quality = "720p"
+        username = None
         if user_id is not None:
             default_quality = self.stats.get_user_settings(user_id).default_quality
+            sender = getattr(event, "sender", None)
+            username = getattr(sender, "username", None) if sender else None
+
         parsed = parse_inline_query(query_text, default_quality=default_quality)
         builder = event.builder
 
-        if not parsed:
+        if parsed:
+            title = await get_media_title(parsed.url, fallback=parsed.description)
+            token = uuid.uuid4().hex[:16]
+            INLINE_JOBS[token] = parsed
+            result = await builder.article(
+                title=title,
+                description=parsed.description,
+                text="⏳ Загрузка…",
+                buttons=[Button.inline("⏳", b"noop")],
+                id=token,
+            )
+            await event.answer([result], cache_time=0)
+            return
+
+        query = query_text.strip()
+        if not query:
             hint = await builder.article(
-                title="Кинь ссылку YouTube / TikTok / X / Pinterest",
-                description="Для YouTube: music или 360/480/720/1080 + ссылка",
+                title="Ссылка или поисковый запрос",
+                description="YouTube / TikTok / X / Pinterest · или текст поиска",
                 text=(
-                    "Отправьте ссылку после @бота.\n"
-                    "YouTube: `music` / `480` + ссылка. Остальные платформы — просто ссылка.\n"
+                    "После @бота укажите ссылку или текст для поиска на YouTube.\n"
+                    "Ссылка: `music` / `480` + URL. Поиск: просто слова.\n"
                     "Сначала напишите боту /start в ЛС."
                 ),
                 buttons=[Button.inline("⏳", b"noop")],
@@ -2756,18 +2775,65 @@ class BotHandlers:
             await event.answer([hint], cache_time=0)
             return
 
-        title = await get_media_title(parsed.url, fallback=parsed.description)
-        token = uuid.uuid4().hex[:16]
-        INLINE_JOBS[token] = parsed
+        if user_id is not None:
+            self.stats.track_user(user_id, username)
+            self.stats.track_search(user_id, username)
 
-        result = await builder.article(
-            title=title,
-            description=parsed.description,
-            text="⏳ Загрузка…",
-            buttons=[Button.inline("⏳", b"noop")],
-            id=token,
-        )
-        await event.answer([result], cache_time=0)
+        results = await search_youtube(query, max_results=5)
+        if not results:
+            empty = await builder.article(
+                title="Ничего не найдено",
+                description="Попробуйте другой запрос",
+                text="По этому запросу ничего не нашлось. Измените формулировку.",
+                buttons=[Button.inline("⏳", b"noop")],
+                id="search_empty",
+            )
+            await event.answer([empty], cache_time=0)
+            return
+
+        articles = []
+        for item in results:
+            url = str(item.get("url") or "")
+            job = parse_inline_query(url, default_quality=default_quality)
+            if job is None:
+                continue
+            token = uuid.uuid4().hex[:16]
+            INLINE_JOBS[token] = job
+
+            title = str(item.get("title") or "Без названия")
+            if len(title) > 64:
+                title = title[:61] + "..."
+
+            duration = int(item["duration"]) if item.get("duration") else 0
+            duration_label = f"{duration // 60}:{duration % 60:02d}" if duration else "?:??"
+            channel = str(item.get("channel") or "")
+            desc_parts = [p for p in (channel, duration_label, default_quality) if p]
+            description = " · ".join(desc_parts)
+            if len(description) > 64:
+                description = description[:61] + "..."
+
+            articles.append(
+                await builder.article(
+                    title=title,
+                    description=description,
+                    text="⏳ Загрузка…",
+                    buttons=[Button.inline("⏳", b"noop")],
+                    id=token,
+                )
+            )
+
+        if not articles:
+            empty = await builder.article(
+                title="Ничего не найдено",
+                description="Попробуйте другой запрос",
+                text="По этому запросу ничего не нашлось. Измените формулировку.",
+                buttons=[Button.inline("⏳", b"noop")],
+                id="search_empty",
+            )
+            await event.answer([empty], cache_time=0)
+            return
+
+        await event.answer(articles, cache_time=0)
 
     async def chosen_inline_handler(self, event: UpdateBotInlineSend):
         """Download media after user picks an inline result and edit the via-message."""
