@@ -659,49 +659,29 @@ async def send_playlist_album(
     show_bot_caption: bool = True,
     show_title: bool = True,
 ) -> None:
-    """Send up to 10 downloaded files as one Telegram album (media group).
+    """Send a playlist batch (up to 10 files).
 
-    Audio must be forced as documents — Telegram rejects music/audio in albums
-    (MediaInvalidError). Videos go as a normal video album.
-    Uploads once; falls back to singles reusing the same uploaded handles.
+    Telegram media groups cannot contain music/audio (MediaInvalidError).
+    Audio is therefore sent as separate music messages with a player.
+    Video is sent as one album when possible; falls back to singles.
     """
     from .captions import build_media_caption
 
     if not items:
         return
 
-    # Upload once (album or singles reuse the same handles — no double disk upload)
-    uploaded = []
-    for path, _metadata in items:
-        uploaded.append(await client.upload_file(path))
-
-    album_caption = f"📦 {len(items)} шт."
-    if show_bot_caption and bot_username:
-        album_caption = f"{album_caption}\n@{bot_username}"
-
-    try:
-        # Audio/mp3 as documents in a group; video as video album.
-        # Only one caption on the album — per-item caption lists often cause MediaInvalid.
-        await client.send_file(
-            chat_id,
-            file=uploaded,
-            caption=album_caption,
-            force_document=(mode == "audio"),
-            supports_streaming=(mode == "video"),
-        )
-        return
-    except Exception as e:
-        logger.warning(f"Playlist album send failed, falling back to singles: {e}")
-
-    for handle, (_path, metadata) in zip(uploaded, items, strict=True):
+    def _item_caption(metadata: dict) -> str:
         title = metadata.get("title") or metadata.get("track")
-        caption = build_media_caption(
+        return build_media_caption(
             bot_username=bot_username,
             title=title if isinstance(title, str) else None,
             show_bot_caption=show_bot_caption,
             show_title=show_title,
         )
-        if mode == "audio":
+
+    # Music cannot be grouped — send as proper audio players.
+    if mode == "audio":
+        for path, metadata in items:
             audio_attr = DocumentAttributeAudio(
                 duration=metadata.get("duration", 0),
                 title=metadata.get("track", "Unknown"),
@@ -709,25 +689,44 @@ async def send_playlist_album(
             )
             await client.send_file(
                 chat_id,
-                handle,
-                caption=caption,
+                path,
+                caption=_item_caption(metadata),
                 attributes=[audio_attr],
                 force_document=False,
             )
-        else:
-            video_attr = DocumentAttributeVideo(
-                duration=metadata.get("duration", 0),
-                w=metadata.get("width", DEFAULT_VIDEO_WIDTH),
-                h=metadata.get("height", DEFAULT_VIDEO_HEIGHT),
-                supports_streaming=True,
-            )
-            await client.send_file(
-                chat_id,
-                handle,
-                caption=caption,
-                supports_streaming=True,
-                attributes=[video_attr],
-            )
+        return
+
+    # Video: one album (media group); upload once, reuse handles on fallback.
+    uploaded = [await client.upload_file(path) for path, _ in items]
+    album_caption = f"📦 {len(items)} шт."
+    if show_bot_caption and bot_username:
+        album_caption = f"{album_caption}\n@{bot_username}"
+
+    try:
+        await client.send_file(
+            chat_id,
+            file=uploaded,
+            caption=album_caption,
+            supports_streaming=True,
+        )
+        return
+    except Exception as e:
+        logger.warning(f"Playlist album send failed, falling back to singles: {e}")
+
+    for handle, (_path, metadata) in zip(uploaded, items, strict=True):
+        video_attr = DocumentAttributeVideo(
+            duration=metadata.get("duration", 0),
+            w=metadata.get("width", DEFAULT_VIDEO_WIDTH),
+            h=metadata.get("height", DEFAULT_VIDEO_HEIGHT),
+            supports_streaming=True,
+        )
+        await client.send_file(
+            chat_id,
+            handle,
+            caption=_item_caption(metadata),
+            supports_streaming=True,
+            attributes=[video_attr],
+        )
 
 
 async def send_video_content(

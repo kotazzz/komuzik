@@ -796,7 +796,7 @@ class BotHandlers:
     async def _download_playlist(
         self, event, session: PlaylistSession, *, mode: str, quality: str
     ) -> None:
-        """Download in batches of 10; progress per file; send as albums."""
+        """Download in batches of 10; progress per file; video albums / audio singles."""
         user_id = session.user_id
         username = None
         try:
