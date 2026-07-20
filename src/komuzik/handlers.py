@@ -1967,28 +1967,45 @@ class BotHandlers:
         try:
             await edit_inline_text(self.client, inline_msg_id, "⏳ Загрузка…")
             file_path, metadata, media_kind = await self._download_for_inline(parsed)
-            try:
-                staging_msg = await stage_media_to_user(
+            storage_chat_id = self.stats.get_storage_chat_id()
+            if storage_chat_id is not None:
+                staging_msg = await stage_media(
                     self.client,
-                    user_id,
+                    storage_chat_id,
                     file_path,
                     media_kind,
                     metadata,
                     self.bot_username,
                     **self._caption_kwargs(user_id),
                 )
-            except Exception as e:
-                if is_pm_unavailable_error(e):
-                    await edit_inline_text(self.client, inline_msg_id, PM_UNAVAILABLE_MESSAGE)
-                    self._track_inline_download(
-                        parsed, user_id, username, success=False, error_message=str(e)
+                try:
+                    await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
+                    self._track_inline_download(parsed, user_id, username, success=True)
+                finally:
+                    await delete_staging(self.client, storage_chat_id, [staging_msg])
+            else:
+                try:
+                    staging_msg = await stage_media_to_user(
+                        self.client,
+                        user_id,
+                        file_path,
+                        media_kind,
+                        metadata,
+                        self.bot_username,
+                        **self._caption_kwargs(user_id),
                     )
-                    return
-                raise
+                except Exception as e:
+                    if is_pm_unavailable_error(e):
+                        await edit_inline_text(self.client, inline_msg_id, PM_UNAVAILABLE_MESSAGE)
+                        self._track_inline_download(
+                            parsed, user_id, username, success=False, error_message=str(e)
+                        )
+                        return
+                    raise
 
-            await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
-            await delete_staging_message(self.client, user_id, staging_msg)
-            self._track_inline_download(parsed, user_id, username, success=True)
+                await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
+                await delete_staging_message(self.client, user_id, staging_msg)
+                self._track_inline_download(parsed, user_id, username, success=True)
 
         except Exception as e:
             logger.error(f"Inline download failed for {parsed.url}: {e}")
