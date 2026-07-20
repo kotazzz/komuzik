@@ -57,6 +57,7 @@ from .playlist import (
 from .repository import StatsRepository, format_download_history_line, format_user_label
 from .stats_infographic import get_stats_image
 from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
+from .user_errors import format_download_error
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +295,11 @@ class BotHandlers:
                         error_message=str(e),
                         url=url,
                     )
-                    await event.respond(f"Произошла ошибка при обработке {content_type}: {e!s}")
+                    await event.respond(
+                        format_download_error(
+                            e, context=f"Произошла ошибка при обработке {content_type}:"
+                        )
+                    )
         finally:
             # Always release the download slot
             if file_path:
@@ -1289,7 +1294,7 @@ class BotHandlers:
             )
             try:
                 await event.respond(
-                    f"❌ Не удалось загрузить: {e!s}",
+                    format_download_error(e, context="❌ Не удалось загрузить:"),
                     reply_to=reply_to,
                 )
             except Exception as send_error:
@@ -1359,7 +1364,11 @@ class BotHandlers:
                         error_message=str(e),
                         url=url,
                     )
-                    await event.respond(f"Произошла ошибка при обработке TikTok видео: {e!s}")
+                    await event.respond(
+                        format_download_error(
+                            e, context="Произошла ошибка при обработке TikTok видео:"
+                        )
+                    )
         finally:
             # Always release the download slot
             if file_path:
@@ -1442,7 +1451,11 @@ class BotHandlers:
                         error_message=str(e),
                         url=url,
                     )
-                    await event.respond(f"Произошла ошибка при обработке YouTube Short: {e!s}")
+                    await event.respond(
+                        format_download_error(
+                            e, context="Произошла ошибка при обработке YouTube Short:"
+                        )
+                    )
         finally:
             if file_path:
                 self._cleanup_download_file(file_path)
@@ -1785,7 +1798,11 @@ class BotHandlers:
                         error_message=str(e),
                         url=url,
                     )
-                    await event.respond(f"Произошла ошибка при обработке контента: {e!s}")
+                    await event.respond(
+                        format_download_error(
+                            e, context="Произошла ошибка при обработке контента:"
+                        )
+                    )
         finally:
             if file_path:
                 self._cleanup_download_file(file_path)
@@ -1854,7 +1871,11 @@ class BotHandlers:
                         error_message=str(e),
                         url=url,
                     )
-                    await event.respond(f"Произошла ошибка при обработке Pinterest: {e!s}")
+                    await event.respond(
+                        format_download_error(
+                            e, context="Произошла ошибка при обработке Pinterest:"
+                        )
+                    )
         finally:
             if file_path:
                 self._cleanup_download_file(file_path)
@@ -2727,7 +2748,7 @@ class BotHandlers:
                 await edit_inline_text(
                     self.client,
                     inline_msg_id,
-                    f"❌ Не удалось загрузить: {e!s}",
+                    format_download_error(e, context="❌ Не удалось загрузить:"),
                 )
             except Exception as edit_error:
                 logger.error(f"Failed to edit inline error text: {edit_error}")
