@@ -840,7 +840,11 @@ class BotHandlers:
         if reply_id != session.preview_msg_id:
             return False
 
-        text = getattr(message_obj, "text", None) if message_obj is not None else None
+        text = None
+        if message_obj is not None:
+            text = getattr(message_obj, "raw_text", None) or getattr(message_obj, "message", None)
+            if not isinstance(text, str):
+                text = getattr(message_obj, "text", None)
         if not isinstance(text, str):
             return False
 

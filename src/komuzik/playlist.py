@@ -82,42 +82,72 @@ def find_playlist_url(text: str) -> tuple[str, bool] | None:
     return f"https://www.youtube.com/playlist?list={list_id}", False
 
 
+def _normalize_exclusion_text(ops: str) -> str:
+    """Normalize punctuation users may type from mobile keyboards."""
+    text = ops.strip()
+    replacements = {
+        "，": ",",  # fullwidth comma
+        "､": ",",
+        "；": ",",
+        ";": ",",
+        "–": "-",  # en dash
+        "—": "-",  # em dash
+        "−": "-",  # minus sign
+        "＋": "+",  # fullwidth plus
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text
+
+
 def parse_exclusion_ops(ops: str, max_n: int, current: set[int]) -> set[int] | None:
     """Apply exclusion/inclusion ops. Returns new set or None if invalid.
 
-    Sign ``+`` / ``-`` applies to the token and to following bare numbers until
-    another sign appears (e.g. ``+11,13,15`` includes 11, 13 and 15;
-    ``-1,3,8`` excludes 1, 3 and 8). Bare numbers with no prior sign exclude.
+    A leading ``+`` or ``-`` sets the mode for that item and for all following
+    bare numbers/ranges until another sign appears.
+
+    Examples::
+
+        +11,13,15,18-20  → include 11, 13, 15, 18, 19, 20
+        -1,3,8           → exclude 1, 3, 8
+        +1,2,-4,5        → include 1, 2; exclude 4, 5
     """
     if not ops or not ops.strip():
         return None
-    text = ops.strip()
-    # Must look like exclusion syntax, not a URL/command
+    text = _normalize_exclusion_text(ops)
     if text.startswith("http") or text.startswith("/"):
         return None
     if not re.fullmatch(r"[+\-\d,\s]+", text):
         return None
 
     result = set(current)
-    include = False  # default for bare numbers (e.g. ``1,2,3``)
+    # None = no sign seen yet; bare items default to exclude
+    include: bool | None = None
+
     for raw in text.split(","):
         token = raw.strip()
         if not token:
             continue
-        if token[0] == "+":
+
+        if token.startswith("+"):
             include = True
             body = token[1:].strip()
-        elif token[0] == "-":
+        elif token.startswith("-"):
             include = False
             body = token[1:].strip()
         else:
-            # Inherit last ``+`` / ``-`` (or default exclude)
             body = token
+
         if not body:
             return None
+
+        do_include = bool(include) if include is not None else False
+
         try:
             if "-" in body:
                 a_s, b_s = body.split("-", 1)
+                if not a_s or not b_s:
+                    return None
                 start, end = int(a_s), int(b_s)
                 if start > end:
                     start, end = end, start
@@ -126,13 +156,15 @@ def parse_exclusion_ops(ops: str, max_n: int, current: set[int]) -> set[int] | N
                 indices = [int(body)]
         except ValueError:
             return None
+
         for i in indices:
             if i < 1 or i > max_n:
                 continue
-            if include:
+            if do_include:
                 result.discard(i)
             else:
                 result.add(i)
+
     return result
 
 
