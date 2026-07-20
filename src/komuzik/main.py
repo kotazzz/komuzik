@@ -49,7 +49,7 @@ async def main():
     # Initialize repository
     stats_repo = StatsRepository(db)
     config_loader = ConfigLoader()
-    download_limiter = DownloadLimiter(config_loader=config_loader)
+    download_limiter = DownloadLimiter(config_loader=config_loader, stats_repo=stats_repo)
 
     # Start the bot
     start_result = client.start(bot_token=BOT_TOKEN or "")
