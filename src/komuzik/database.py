@@ -59,11 +59,14 @@ class Database:
                 username TEXT,
                 video_format TEXT,
                 platform TEXT,
+                source TEXT,
                 success BOOLEAN NOT NULL DEFAULT 1,
                 error_message TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        self._ensure_statistics_source_column(cursor)
 
         # Users table (to track unique users)
         cursor.execute("""
@@ -102,8 +105,20 @@ class Database:
             ON statistics(success)
         """)
 
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_statistics_source
+            ON statistics(source)
+        """)
+
         conn.commit()
         logger.info("Database tables created successfully")
+
+    def _ensure_statistics_source_column(self, cursor: sqlite3.Cursor):
+        """Add source column to existing statistics tables (migration)."""
+        columns = {row[1] for row in cursor.execute("PRAGMA table_info(statistics)").fetchall()}
+        if "source" not in columns:
+            cursor.execute("ALTER TABLE statistics ADD COLUMN source TEXT")
+            logger.info("Migrated statistics table: added source column")
 
     def close(self):
         """Close database connection."""

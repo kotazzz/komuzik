@@ -140,6 +140,24 @@ async def get_available_formats(url: str) -> list[int]:
         return VIDEO_FALLBACK_QUALITIES
 
 
+async def get_media_title(url: str, fallback: str = "Медиа") -> str:
+    """Fetch a short title for inline results without downloading the file."""
+    try:
+        loop = asyncio.get_running_loop()
+        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
+            info = cast(
+                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+            )
+        title = info.get("title") or info.get("fulltitle") or fallback
+        title = str(title).strip()
+        if len(title) > 64:
+            title = title[:61] + "..."
+        return title or fallback
+    except Exception as e:
+        logger.warning(f"Failed to get media title for {url}: {e}")
+        return fallback
+
+
 async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) -> list[dict]:
     """Search for YouTube videos and return top results."""
     try:

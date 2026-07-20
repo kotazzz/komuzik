@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from telethon import Button, events
 from telethon.tl.custom import Message
+from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
     MSG_HELP,
@@ -21,17 +22,27 @@ from .config import (
 )
 from .download_limiter import DownloadLimiter
 from .downloaders import (
-    download_tiktok_video,
     download_pinterest_content,
+    download_tiktok_video,
     download_twitter_video,
     download_youtube_audio,
     download_youtube_video,
     get_available_formats,
+    get_media_title,
     search_youtube,
     send_audio_content,
     send_image_content,
     send_video_content,
 )
+from .inline_media import (
+    PM_UNAVAILABLE_MESSAGE,
+    delete_staging_message,
+    edit_inline_text,
+    edit_inline_with_media,
+    is_pm_unavailable_error,
+    stage_media_to_user,
+)
+from .inline_query import ParsedInlineQuery, parse_inline_query
 from .repository import StatsRepository
 
 logger = logging.getLogger(__name__)
@@ -39,6 +50,7 @@ logger = logging.getLogger(__name__)
 # States for /report command state machine
 REPORT_STATES = {}
 CALLBACK_URLS: dict[str, str] = {}
+INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -68,6 +80,8 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern=r"^/search(?:\s+(.+))?"))(self.search_handler)
         self.client.on(events.NewMessage())(self.message_handler)
         self.client.on(events.CallbackQuery())(self.callback_handler)
+        self.client.on(events.InlineQuery())(self.inline_query_handler)
+        self.client.on(events.Raw(UpdateBotInlineSend))(self.chosen_inline_handler)
 
     def _track_user(self, event: Message):
         """Track user activity."""
@@ -629,8 +643,24 @@ class BotHandlers:
 
             message += f"🎬 Видео (YouTube): {stats['total_videos']}\n"
             message += f"🎵 Аудио: {stats['total_audio']}\n"
-            message += f"📱 TikTok: {stats['total_tiktoks']}\n\n"
+            message += f"📱 TikTok: {stats['total_tiktoks']}\n"
             message += f"📌 Pinterest: {stats['total_pinterest']}\n\n"
+
+            by_source = stats.get("by_source") or {}
+            by_content = stats.get("by_content") or {}
+            source_total = max(by_source.get("dm", 0) + by_source.get("inline", 0), 1)
+            content_total = max(by_content.get("video", 0) + by_content.get("audio", 0), 1)
+            dm_pct = round(100 * by_source.get("dm", 0) / source_total)
+            inline_pct = round(100 * by_source.get("inline", 0) / source_total)
+            video_pct = round(100 * by_content.get("video", 0) / content_total)
+            audio_pct = round(100 * by_content.get("audio", 0) / content_total)
+
+            message += "📡 Источник загрузок:\n"
+            message += f"  • ЛС (dm): {by_source.get('dm', 0)} ({dm_pct}%)\n"
+            message += f"  • Inline: {by_source.get('inline', 0)} ({inline_pct}%)\n\n"
+            message += "🎛 Тип контента:\n"
+            message += f"  • Видео/медиа: {by_content.get('video', 0)} ({video_pct}%)\n"
+            message += f"  • Аудио: {by_content.get('audio', 0)} ({audio_pct}%)\n\n"
 
             # Popular video formats
             if stats["popular_video_formats"]:
@@ -815,6 +845,11 @@ class BotHandlers:
         data = event.data.decode("utf-8")
         user_id = cast("int | None", event.sender_id)
 
+        # Dummy keyboard on inline placeholder — needed for inline_message_id
+        if data == "noop":
+            await event.answer()
+            return
+
         # Handle report cancel
         if data == "report_cancel":
             if user_id is None:
@@ -839,3 +874,192 @@ class BotHandlers:
                 return
 
         logger.warning(f"Unknown callback data: {data}")
+
+    async def inline_query_handler(self, event):
+        """Answer inline queries with a placeholder article for supported links."""
+        query_text = event.text or ""
+        parsed = parse_inline_query(query_text)
+        builder = event.builder
+
+        if not parsed:
+            hint = await builder.article(
+                title="Кинь ссылку YouTube / TikTok / X / Pinterest",
+                description="Для YouTube: music или 360/480/720/1080 + ссылка",
+                text=(
+                    "Отправьте ссылку после @бота.\n"
+                    "YouTube: `music` / `480` + ссылка. Остальные платформы — просто ссылка.\n"
+                    "Сначала напишите боту /start в ЛС."
+                ),
+                buttons=[Button.inline("⏳", b"noop")],
+                id="hint",
+            )
+            await event.answer([hint], cache_time=0)
+            return
+
+        title = await get_media_title(parsed.url, fallback=parsed.description)
+        token = uuid.uuid4().hex[:16]
+        INLINE_JOBS[token] = parsed
+
+        result = await builder.article(
+            title=title,
+            description=parsed.description,
+            text="⏳ Загрузка…",
+            buttons=[Button.inline("⏳", b"noop")],
+            id=token,
+        )
+        await event.answer([result], cache_time=0)
+
+    async def chosen_inline_handler(self, event: UpdateBotInlineSend):
+        """Download media after user picks an inline result and edit the via-message."""
+        token = event.id
+        inline_msg_id = event.msg_id
+        user_id = event.user_id
+        parsed = INLINE_JOBS.pop(token, None)
+
+        if parsed is None:
+            logger.warning(f"Unknown inline job token: {token}")
+            return
+
+        if inline_msg_id is None:
+            logger.warning("Chosen inline result without msg_id (enable /setinlinefeedback)")
+            return
+
+        username = None
+        try:
+            user = await self.client.get_entity(user_id)
+            username = getattr(user, "username", None)
+        except Exception:
+            pass
+
+        self.stats.track_user(user_id, username)
+
+        download_id = str(uuid.uuid4())
+        if not await self.download_limiter.start_download(user_id, download_id):
+            active_count = self.download_limiter.get_active_count(user_id)
+            await edit_inline_text(
+                self.client,
+                inline_msg_id,
+                f"⚠️ Уже есть активная загрузка ({active_count}/"
+                f"{self.download_limiter.MAX_DOWNLOADS_PER_USER}). Подождите.",
+            )
+            return
+
+        file_path = None
+        try:
+            await edit_inline_text(self.client, inline_msg_id, "⏳ Загрузка…")
+            file_path, metadata, media_kind = await self._download_for_inline(parsed)
+            try:
+                staging_msg = await stage_media_to_user(
+                    self.client,
+                    user_id,
+                    file_path,
+                    media_kind,
+                    metadata,
+                    self.bot_username,
+                )
+            except Exception as e:
+                if is_pm_unavailable_error(e):
+                    await edit_inline_text(self.client, inline_msg_id, PM_UNAVAILABLE_MESSAGE)
+                    self._track_inline_download(
+                        parsed, user_id, username, success=False, error_message=str(e)
+                    )
+                    return
+                raise
+
+            await edit_inline_with_media(self.client, inline_msg_id, staging_msg)
+            await delete_staging_message(self.client, user_id, staging_msg)
+            self._track_inline_download(parsed, user_id, username, success=True)
+
+        except Exception as e:
+            logger.error(f"Inline download failed for {parsed.url}: {e}")
+            try:
+                await edit_inline_text(
+                    self.client,
+                    inline_msg_id,
+                    f"❌ Не удалось загрузить: {e!s}",
+                )
+            except Exception as edit_error:
+                logger.error(f"Failed to edit inline error text: {edit_error}")
+            self._track_inline_download(
+                parsed, user_id, username, success=False, error_message=str(e)
+            )
+        finally:
+            if file_path:
+                self._cleanup_download_file(file_path)
+            await self.download_limiter.finish_download(user_id, download_id)
+
+    async def _download_for_inline(self, parsed: ParsedInlineQuery) -> tuple[str, dict, str]:
+        """Download media for an inline job. Returns (path, metadata, media_kind)."""
+        if parsed.platform == "youtube" and parsed.mode == "audio":
+            file_path, metadata = await download_youtube_audio(parsed.url, parsed.quality)
+            return file_path, metadata, "audio"
+
+        if parsed.platform in {"youtube", "youtube_shorts"}:
+            quality = parsed.quality if parsed.platform == "youtube" else "best"
+            file_path, metadata = await download_youtube_video(parsed.url, quality)
+            return file_path, metadata, "video"
+
+        if parsed.platform == "tiktok":
+            file_path, metadata = await download_tiktok_video(parsed.url)
+            return file_path, metadata, "video"
+
+        if parsed.platform == "twitter":
+            file_path, metadata = await download_twitter_video(parsed.url)
+            kind = "photo" if metadata.get("content_type") == "photo" else "video"
+            return file_path, metadata, kind
+
+        if parsed.platform == "pinterest":
+            file_path, metadata = await download_pinterest_content(parsed.url)
+            kind = "photo" if metadata.get("content_type") == "photo" else "video"
+            return file_path, metadata, kind
+
+        raise ValueError(f"Unsupported platform: {parsed.platform}")
+
+    def _track_inline_download(
+        self,
+        parsed: ParsedInlineQuery,
+        user_id: int,
+        username: str | None,
+        *,
+        success: bool,
+        error_message: str | None = None,
+    ):
+        """Record inline download stats with source=inline."""
+        source = "inline"
+        if parsed.platform == "youtube" and parsed.mode == "audio":
+            self.stats.track_audio_download(
+                user_id,
+                parsed.quality,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+            )
+        elif parsed.platform in {"youtube", "youtube_shorts"}:
+            platform = "youtube_shorts" if parsed.platform == "youtube_shorts" else "youtube"
+            self.stats.track_video_download(
+                user_id,
+                parsed.quality,
+                platform,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+            )
+        elif parsed.platform == "pinterest":
+            self.stats.track_pinterest_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+            )
+        else:
+            # tiktok + twitter (existing DM path also uses tiktok tracker for twitter)
+            self.stats.track_tiktok_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+            )

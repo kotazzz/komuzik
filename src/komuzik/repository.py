@@ -6,6 +6,19 @@ from .database import Database
 
 logger = logging.getLogger(__name__)
 
+DOWNLOAD_EVENT_TYPES = (
+    "video_download",
+    "audio_download",
+    "tiktok_download",
+    "pinterest_download",
+)
+VIDEO_LIKE_EVENT_TYPES = (
+    "video_download",
+    "tiktok_download",
+    "pinterest_download",
+)
+AUDIO_EVENT_TYPES = ("audio_download",)
+
 
 class StatsRepository:
     """Repository for managing bot statistics."""
@@ -68,6 +81,7 @@ class StatsRepository:
         username: str | None = None,
         success: bool = True,
         error_message: str | None = None,
+        source: str = "dm",
     ):
         """Track a video download event.
 
@@ -78,6 +92,7 @@ class StatsRepository:
             username: Telegram username
             success: Whether download was successful
             error_message: Error message if download failed
+            source: Download source ('dm' or 'inline')
 
         """
         self._track_event(
@@ -88,6 +103,7 @@ class StatsRepository:
             platform=platform,
             success=success,
             error_message=error_message,
+            source=source,
         )
 
     def track_audio_download(
@@ -97,6 +113,7 @@ class StatsRepository:
         username: str | None = None,
         success: bool = True,
         error_message: str | None = None,
+        source: str = "dm",
     ):
         """Track an audio download event.
 
@@ -106,6 +123,7 @@ class StatsRepository:
             username: Telegram username
             success: Whether download was successful
             error_message: Error message if download failed
+            source: Download source ('dm' or 'inline')
 
         """
         self._track_event(
@@ -116,6 +134,7 @@ class StatsRepository:
             platform="youtube",
             success=success,
             error_message=error_message,
+            source=source,
         )
 
     def track_tiktok_download(
@@ -124,6 +143,7 @@ class StatsRepository:
         username: str | None = None,
         success: bool = True,
         error_message: str | None = None,
+        source: str = "dm",
     ):
         """Track a TikTok download event.
 
@@ -132,6 +152,7 @@ class StatsRepository:
             username: Telegram username
             success: Whether download was successful
             error_message: Error message if download failed
+            source: Download source ('dm' or 'inline')
 
         """
         self._track_event(
@@ -141,6 +162,7 @@ class StatsRepository:
             platform="tiktok",
             success=success,
             error_message=error_message,
+            source=source,
         )
 
     def track_pinterest_download(
@@ -149,6 +171,7 @@ class StatsRepository:
         username: str | None = None,
         success: bool = True,
         error_message: str | None = None,
+        source: str = "dm",
     ):
         """Track a Pinterest download event.
 
@@ -157,6 +180,7 @@ class StatsRepository:
             username: Telegram username
             success: Whether download was successful
             error_message: Error message if download failed
+            source: Download source ('dm' or 'inline')
 
         """
         self._track_event(
@@ -166,10 +190,16 @@ class StatsRepository:
             platform="pinterest",
             success=success,
             error_message=error_message,
+            source=source,
         )
 
     def track_error(
-        self, user_id: int, error_type: str, error_message: str, username: str | None = None
+        self,
+        user_id: int,
+        error_type: str,
+        error_message: str,
+        username: str | None = None,
+        source: str | None = None,
     ):
         """Track an error event.
 
@@ -178,10 +208,16 @@ class StatsRepository:
             error_type: Type of error
             error_message: Error message
             username: Telegram username
+            source: Download source if applicable
 
         """
         self._track_event(
-            f"error_{error_type}", user_id, username, success=False, error_message=error_message
+            f"error_{error_type}",
+            user_id,
+            username,
+            success=False,
+            error_message=error_message,
+            source=source,
         )
 
     def _track_event(
@@ -193,6 +229,7 @@ class StatsRepository:
         platform: str | None = None,
         success: bool = True,
         error_message: str | None = None,
+        source: str | None = None,
     ):
         """Internal method to track any event.
 
@@ -204,14 +241,24 @@ class StatsRepository:
             platform: Platform name
             success: Whether operation was successful
             error_message: Error message if failed
+            source: Download source ('dm' or 'inline')
 
         """
         try:
             self.db.execute(
                 """INSERT INTO statistics 
-                   (event_type, user_id, username, video_format, platform, success, error_message)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (event_type, user_id, username, video_format, platform, success, error_message),
+                   (event_type, user_id, username, video_format, platform, source, success, error_message)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event_type,
+                    user_id,
+                    username,
+                    video_format,
+                    platform,
+                    source,
+                    success,
+                    error_message,
+                ),
             )
             logger.debug(f"Tracked event: {event_type} for user {user_id}")
         except Exception as e:
@@ -245,6 +292,8 @@ class StatsRepository:
             "popular_video_formats": self._get_popular_formats("video_download", date_filter),
             "popular_audio_formats": self._get_popular_formats("audio_download", date_filter),
             "error_count": self._get_error_count(date_filter),
+            "by_source": self._get_download_breakdown_by_source(date_filter),
+            "by_content": self._get_download_breakdown_by_content(date_filter),
         }
 
         return stats
@@ -300,6 +349,10 @@ class StatsRepository:
         result = self.db.fetchone(query, (event_type,))
         return result[0] if result else 0
 
+    def _download_event_filter(self) -> str:
+        placeholders = ", ".join("?" * len(DOWNLOAD_EVENT_TYPES))
+        return f"event_type IN ({placeholders})"
+
     def _get_total_downloads(self, date_filter: str) -> int:
         """Get total number of downloads (video + audio + tiktok + pinterest).
 
@@ -311,9 +364,9 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
+                    WHERE {self._download_event_filter()}
                     {date_filter}"""
-        result = self.db.fetchone(query)
+        result = self.db.fetchone(query, DOWNLOAD_EVENT_TYPES)
         return result[0] if result else 0
 
     def _get_successful_downloads(self, date_filter: str) -> int:
@@ -327,10 +380,10 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
+                    WHERE {self._download_event_filter()}
                     AND success = 1
                     {date_filter}"""
-        result = self.db.fetchone(query)
+        result = self.db.fetchone(query, DOWNLOAD_EVENT_TYPES)
         return result[0] if result else 0
 
     def _get_failed_downloads(self, date_filter: str) -> int:
@@ -344,11 +397,42 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
+                    WHERE {self._download_event_filter()}
                     AND success = 0
                     {date_filter}"""
-        result = self.db.fetchone(query)
+        result = self.db.fetchone(query, DOWNLOAD_EVENT_TYPES)
         return result[0] if result else 0
+
+    def _get_download_breakdown_by_source(self, date_filter: str) -> dict[str, int]:
+        """Count downloads by source (dm/inline). Missing source counts as dm."""
+        query = f"""SELECT COALESCE(source, 'dm') AS src, COUNT(*) as count
+                    FROM statistics
+                    WHERE {self._download_event_filter()}
+                    {date_filter}
+                    GROUP BY COALESCE(source, 'dm')"""
+        rows = self.db.fetchall(query, DOWNLOAD_EVENT_TYPES)
+        result = {"dm": 0, "inline": 0}
+        for row in rows or []:
+            key = row[0] if row[0] in result else "dm"
+            result[key] = row[1]
+        return result
+
+    def _get_download_breakdown_by_content(self, date_filter: str) -> dict[str, int]:
+        """Count downloads by content kind (video-like vs audio)."""
+        video_placeholders = ", ".join("?" * len(VIDEO_LIKE_EVENT_TYPES))
+        audio_placeholders = ", ".join("?" * len(AUDIO_EVENT_TYPES))
+        video_query = f"""SELECT COUNT(*) FROM statistics
+                          WHERE event_type IN ({video_placeholders})
+                          {date_filter}"""
+        audio_query = f"""SELECT COUNT(*) FROM statistics
+                          WHERE event_type IN ({audio_placeholders})
+                          {date_filter}"""
+        video_count = self.db.fetchone(video_query, VIDEO_LIKE_EVENT_TYPES)
+        audio_count = self.db.fetchone(audio_query, AUDIO_EVENT_TYPES)
+        return {
+            "video": video_count[0] if video_count else 0,
+            "audio": audio_count[0] if audio_count else 0,
+        }
 
     def _get_popular_formats(self, event_type: str, date_filter: str, limit: int = 5) -> list:
         """Get most popular formats for a given event type.
