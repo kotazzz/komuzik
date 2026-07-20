@@ -855,3 +855,41 @@ class StatsRepository:
             raise ValueError(f"Unknown chat settings key: {key}")
         current = self.get_chat_settings(chat_id)
         return self.set_chat_setting(chat_id, key, not getattr(current, key))
+
+    # === Bot config (storage group) ===
+
+    STORAGE_CHAT_ID_KEY = "storage_chat_id"
+
+    def get_storage_chat_id(self) -> int | None:
+        try:
+            row = self.db.fetchone(
+                "SELECT value FROM bot_config WHERE key = ?",
+                (self.STORAGE_CHAT_ID_KEY,),
+            )
+            if not row or row[0] is None:
+                return None
+            return int(row[0])
+        except Exception as e:
+            logger.error(f"Failed to get storage_chat_id: {e}")
+            return None
+
+    def set_storage_chat_id(self, chat_id: int) -> None:
+        try:
+            self.db.execute(
+                """INSERT INTO bot_config(key, value) VALUES(?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (self.STORAGE_CHAT_ID_KEY, str(int(chat_id))),
+            )
+        except Exception as e:
+            logger.error(f"Failed to set storage_chat_id: {e}")
+            raise
+
+    def clear_storage_chat_id(self) -> None:
+        try:
+            self.db.execute(
+                "DELETE FROM bot_config WHERE key = ?",
+                (self.STORAGE_CHAT_ID_KEY,),
+            )
+        except Exception as e:
+            logger.error(f"Failed to clear storage_chat_id: {e}")
+            raise

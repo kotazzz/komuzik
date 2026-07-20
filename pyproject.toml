@@ -87,3 +87,6 @@ dev = [
     "ruff>=0.15.9",
     "ty>=0.0.28",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
