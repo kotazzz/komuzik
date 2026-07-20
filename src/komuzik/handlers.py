@@ -35,6 +35,7 @@ from .downloaders import (
     send_playlist_album,
     send_video_content,
 )
+from .storage import copy_messages_to_chat, delete_staging, stage_media
 from .inline_media import (
     PM_UNAVAILABLE_MESSAGE,
     delete_staging_message,
@@ -845,12 +846,50 @@ class BotHandlers:
 
         batch: list[tuple[str, dict]] = []
         cancelled = False
+        storage_chat_id = self.stats.get_storage_chat_id() if mode == "audio" else None
+        use_storage = mode == "audio" and storage_chat_id is not None
 
         async def flush_batch() -> None:
             nonlocal sent, batch
             if not batch:
                 return
             paths = [p for p, _ in batch]
+            if use_storage:
+                staging: list = []
+                try:
+                    for path, metadata in batch:
+                        msg = await stage_media(
+                            self.client,
+                            storage_chat_id,
+                            path,
+                            "audio",
+                            metadata,
+                            self.bot_username,
+                            **caption_kw,
+                        )
+                        staging.append(msg)
+                    try:
+                        await copy_messages_to_chat(self.client, event.chat_id, staging)
+                    except Exception:
+                        try:
+                            await copy_messages_to_chat(self.client, event.chat_id, staging)
+                        except Exception:
+                            for msg in staging:
+                                await copy_messages_to_chat(self.client, event.chat_id, [msg])
+                    sent += len(batch)
+                    self.stats.set_user_last_format(user_id, "audio", quality)
+                except Exception as e:
+                    logger.error(f"Playlist batch send failed: {e}")
+                    try:
+                        await event.respond(f"⚠️ Не удалось отправить пачку ({len(batch)}): {e!s}")
+                    except Exception:
+                        pass
+                finally:
+                    await delete_staging(self.client, storage_chat_id, staging)
+                    for path in paths:
+                        self._cleanup_download_file(path)
+                    batch = []
+                return
             try:
                 await send_playlist_album(
                     self.client,
@@ -947,9 +986,14 @@ class BotHandlers:
                         self._cleanup_download_file(file_path)
 
                 if len(batch) >= PLAYLIST_BATCH_SIZE:
+                    batch_progress = (
+                        f"отправляю пачку {len(batch)} из хранилища…"
+                        if use_storage
+                        else f"отправляю пачку {len(batch)}…"
+                    )
                     await update_progress(
                         f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · отправляю пачку {len(batch)}…"
+                        f"Готово: **{done}/{total}** · {batch_progress}"
                     )
                     await flush_batch()
                     await update_progress(
@@ -963,9 +1007,14 @@ class BotHandlers:
                     break
 
             if batch:
+                remainder_progress = (
+                    f"отправляю остаток ({len(batch)}) из хранилища…"
+                    if use_storage
+                    else f"отправляю остаток ({len(batch)})…"
+                )
                 await update_progress(
                     f"⏳ Плейлист **{session.title}**\n"
-                    f"Готово: **{done}/{total}** · отправляю остаток ({len(batch)})…"
+                    f"Готово: **{done}/{total}** · {remainder_progress}"
                 )
                 await flush_batch()
 
