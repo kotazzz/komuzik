@@ -50,7 +50,7 @@ def test_pages_nonempty_and_callback_len():
 
 def test_key_commands_mentioned():
     cmds = user_page_text("commands")
-    for cmd in ("/report", "/info", "/settings", "/search", "/stats", "/privacy"):
+    for cmd in ("/report", "/info", "/settings", "/search", "/stats", "/limits", "/privacy"):
         assert cmd in cmds
     assert "/admin" in admin_page_text("panel")
     assert "/ban" in admin_page_text("bans")

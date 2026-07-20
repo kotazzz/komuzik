@@ -144,6 +144,7 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern="/help"))(self.help_handler)
         self.client.on(events.NewMessage(pattern=r"^/info(?:@\w+)?"))(self.info_handler)
         self.client.on(events.NewMessage(pattern="/privacy"))(self.privacy_handler)
+        self.client.on(events.NewMessage(pattern=r"^/limits(?:@\w+)?"))(self.limits_handler)
         self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
         self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
         self.client.on(events.NewMessage(pattern="/post"))(self.post_handler)
@@ -395,6 +396,51 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         self._track_user(event)
         await event.respond(MSG_PRIVACY, link_preview=False)
+
+    def _format_user_limits_message(self, user_id: int) -> str:
+        """Build /limits text for the current user."""
+        is_admin = self._is_bot_admin(user_id)
+        unlimited_concurrent = is_admin or user_id in self.download_limiter.UNLIMITED_USER_IDS
+        active = self.download_limiter.get_active_count(user_id)
+        concurrent_cap = self.download_limiter.get_max_per_user()
+
+        if unlimited_concurrent:
+            concurrent_line = f"Одновременные загрузки: **{active}** активных · без лимита"
+        else:
+            concurrent_line = (
+                f"Одновременные загрузки: **{active}/{concurrent_cap}** активных"
+            )
+
+        playlist_limit = self.stats.effective_playlist_limit(user_id, is_admin=is_admin)
+        used = self.stats.get_playlist_usage(user_id)
+        personal = self.stats.get_user_playlist_limit(user_id)
+
+        if playlist_limit is None:
+            playlist_line = "Плейлист / сутки (МСК): без лимита"
+        else:
+            remaining = max(0, playlist_limit - used)
+            source = "персональный" if personal is not None else "общий"
+            playlist_line = (
+                f"Плейлист / сутки (МСК): **{used}/{playlist_limit}** "
+                f"(осталось {remaining}, {source})"
+            )
+
+        return (
+            "📊 **Ваши лимиты**\n\n"
+            f"{concurrent_line}\n"
+            f"{playlist_line}\n\n"
+            "Суточный лимит плейлиста обновляется в полночь по Москве."
+        )
+
+    async def limits_handler(self, event: Message):
+        """Handle /limits — show current concurrent and playlist quotas."""
+        user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
+        self._track_user(event)
+        await event.respond(self._format_user_limits_message(user_id), link_preview=False)
 
     async def _count_bot_groups(self) -> int:
         """Count groups/supergroups the bot is currently in."""
