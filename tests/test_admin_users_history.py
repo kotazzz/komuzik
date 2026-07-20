@@ -1,0 +1,109 @@
+import tempfile
+from pathlib import Path
+
+from komuzik.database import Database
+from komuzik.repository import StatsRepository
+
+
+def _repo() -> tuple[Database, StatsRepository]:
+    tmp = tempfile.mkdtemp()
+    db = Database(str(Path(tmp) / "t.db"))
+    db.connect()
+    return db, StatsRepository(db)
+
+
+def test_list_users_empty():
+    db, repo = _repo()
+    try:
+        assert repo.list_users() == []
+        assert repo.count_users() == 0
+        assert repo.list_user_downloads(1) == []
+        assert repo.count_user_downloads(1) == 0
+    finally:
+        db.close()
+
+
+def test_migration_adds_url_title_display_name_columns():
+    db, repo = _repo()
+    try:
+        stats_cols = {
+            row[1]
+            for row in db.fetchall("PRAGMA table_info(statistics)")
+        }
+        users_cols = {
+            row[1]
+            for row in db.fetchall("PRAGMA table_info(users)")
+        }
+        assert "url" in stats_cols
+        assert "title" in stats_cols
+        assert "display_name" in users_cols
+        assert repo.count_users() == 0
+    finally:
+        db.close()
+
+
+def test_track_download_with_url_and_title():
+    db, repo = _repo()
+    try:
+        uid = 42
+        repo.track_user(uid, "alice", display_name="Alice A")
+        repo.track_video_download(
+            uid,
+            "720p",
+            username="alice",
+            url="https://youtube.com/watch?v=abc",
+            title="My Video",
+        )
+
+        users = repo.list_users()
+        assert len(users) == 1
+        assert users[0]["id"] == uid
+        assert users[0]["username"] == "alice"
+        assert users[0]["display_name"] == "Alice A"
+        assert users[0]["last_seen"] is not None
+
+        downloads = repo.list_user_downloads(uid)
+        assert len(downloads) == 1
+        assert downloads[0]["event_type"] == "video_download"
+        assert downloads[0]["url"] == "https://youtube.com/watch?v=abc"
+        assert downloads[0]["title"] == "My Video"
+        assert downloads[0]["video_format"] == "720p"
+        assert repo.count_user_downloads(uid) == 1
+    finally:
+        db.close()
+
+
+def test_track_user_updates_display_name():
+    db, repo = _repo()
+    try:
+        uid = 7
+        repo.track_user(uid, "bob")
+        repo.track_user(uid, "bob", display_name="Bob B")
+
+        users = repo.list_users()
+        assert users[0]["display_name"] == "Bob B"
+    finally:
+        db.close()
+
+
+def test_list_users_pagination_and_download_types():
+    db, repo = _repo()
+    try:
+        repo.track_user(1, "u1")
+        repo.track_user(2, "u2")
+        repo.track_user(3, "u3")
+
+        repo.track_video_download(1, "720p", username="u1")
+        repo.track_audio_download(1, "high", username="u1", url="https://yt/a", title="Song")
+        repo.track_tiktok_download(1, username="u1")
+        repo.track_pinterest_download(1, username="u1")
+        repo.track_search(1, username="u1")
+
+        assert repo.count_users() == 3
+        assert repo.count_user_downloads(1) == 4
+        assert len(repo.list_user_downloads(1, offset=0, limit=2)) == 2
+
+        page = repo.list_users(offset=1, limit=1)
+        assert len(page) == 1
+    finally:
+        db.close()

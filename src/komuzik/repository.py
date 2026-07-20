@@ -92,28 +92,42 @@ class StatsRepository:
 
     # === User tracking ===
 
-    def track_user(self, user_id: int, username: str | None = None):
+    def track_user(
+        self,
+        user_id: int,
+        username: str | None = None,
+        display_name: str | None = None,
+    ):
         """Track user activity (first seen or update last seen).
 
         Args:
             user_id: Telegram user ID
             username: Telegram username
+            display_name: User display name (first + last) when known
 
         """
         try:
-            # Check if user exists
             existing = self.db.fetchone("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
 
             if existing:
-                # Update last seen
-                self.db.execute(
-                    "UPDATE users SET last_seen = CURRENT_TIMESTAMP, username = ? WHERE user_id = ?",
-                    (username, user_id),
-                )
+                if display_name is not None:
+                    self.db.execute(
+                        """UPDATE users
+                           SET last_seen = CURRENT_TIMESTAMP, username = ?, display_name = ?
+                           WHERE user_id = ?""",
+                        (username, display_name, user_id),
+                    )
+                else:
+                    self.db.execute(
+                        """UPDATE users
+                           SET last_seen = CURRENT_TIMESTAMP, username = ?
+                           WHERE user_id = ?""",
+                        (username, user_id),
+                    )
             else:
-                # Insert new user
                 self.db.execute(
-                    "INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username)
+                    "INSERT INTO users (user_id, username, display_name) VALUES (?, ?, ?)",
+                    (user_id, username, display_name),
                 )
             logger.debug(f"Tracked user: {user_id}")
         except Exception as e:
@@ -140,6 +154,8 @@ class StatsRepository:
         success: bool = True,
         error_message: str | None = None,
         source: str = "dm",
+        url: str | None = None,
+        title: str | None = None,
     ):
         """Track a video download event.
 
@@ -151,6 +167,8 @@ class StatsRepository:
             success: Whether download was successful
             error_message: Error message if download failed
             source: Download source ('dm' or 'inline')
+            url: Source page URL when available
+            title: Media title when available
 
         """
         self._track_event(
@@ -162,6 +180,8 @@ class StatsRepository:
             success=success,
             error_message=error_message,
             source=source,
+            url=url,
+            title=title,
         )
 
     def track_audio_download(
@@ -172,6 +192,8 @@ class StatsRepository:
         success: bool = True,
         error_message: str | None = None,
         source: str = "dm",
+        url: str | None = None,
+        title: str | None = None,
     ):
         """Track an audio download event.
 
@@ -182,6 +204,8 @@ class StatsRepository:
             success: Whether download was successful
             error_message: Error message if download failed
             source: Download source ('dm' or 'inline')
+            url: Source page URL when available
+            title: Media title when available
 
         """
         self._track_event(
@@ -193,6 +217,8 @@ class StatsRepository:
             success=success,
             error_message=error_message,
             source=source,
+            url=url,
+            title=title,
         )
 
     def track_tiktok_download(
@@ -202,6 +228,8 @@ class StatsRepository:
         success: bool = True,
         error_message: str | None = None,
         source: str = "dm",
+        url: str | None = None,
+        title: str | None = None,
     ):
         """Track a TikTok download event.
 
@@ -211,6 +239,8 @@ class StatsRepository:
             success: Whether download was successful
             error_message: Error message if download failed
             source: Download source ('dm' or 'inline')
+            url: Source page URL when available
+            title: Media title when available
 
         """
         self._track_event(
@@ -221,6 +251,8 @@ class StatsRepository:
             success=success,
             error_message=error_message,
             source=source,
+            url=url,
+            title=title,
         )
 
     def track_pinterest_download(
@@ -230,6 +262,8 @@ class StatsRepository:
         success: bool = True,
         error_message: str | None = None,
         source: str = "dm",
+        url: str | None = None,
+        title: str | None = None,
     ):
         """Track a Pinterest download event.
 
@@ -239,6 +273,8 @@ class StatsRepository:
             success: Whether download was successful
             error_message: Error message if download failed
             source: Download source ('dm' or 'inline')
+            url: Source page URL when available
+            title: Media title when available
 
         """
         self._track_event(
@@ -249,6 +285,8 @@ class StatsRepository:
             success=success,
             error_message=error_message,
             source=source,
+            url=url,
+            title=title,
         )
 
     def track_error(
@@ -288,6 +326,8 @@ class StatsRepository:
         success: bool = True,
         error_message: str | None = None,
         source: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
     ):
         """Internal method to track any event.
 
@@ -300,13 +340,16 @@ class StatsRepository:
             success: Whether operation was successful
             error_message: Error message if failed
             source: Download source ('dm' or 'inline')
+            url: Source page URL when available
+            title: Media title when available
 
         """
         try:
             self.db.execute(
-                """INSERT INTO statistics 
-                   (event_type, user_id, username, video_format, platform, source, success, error_message)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO statistics
+                   (event_type, user_id, username, video_format, platform, source,
+                    success, error_message, url, title)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event_type,
                     user_id,
@@ -316,6 +359,8 @@ class StatsRepository:
                     source,
                     success,
                     error_message,
+                    url,
+                    title,
                 ),
             )
             logger.debug(f"Tracked event: {event_type} for user {user_id}")
@@ -544,6 +589,83 @@ class StatsRepository:
         except Exception as e:
             logger.error(f"Failed to get all users: {e}")
             return []
+
+    def list_users(self, offset: int = 0, limit: int = 15) -> list[dict]:
+        """Return users sorted by last_seen DESC with pagination."""
+        try:
+            rows = self.db.fetchall(
+                """SELECT user_id, username, display_name, last_seen
+                   FROM users
+                   ORDER BY last_seen DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+            return [
+                {
+                    "id": row["user_id"],
+                    "username": row["username"],
+                    "display_name": row["display_name"],
+                    "last_seen": row["last_seen"],
+                }
+                for row in rows or []
+            ]
+        except Exception as e:
+            logger.error(f"Failed to list users: {e}")
+            return []
+
+    def count_users(self) -> int:
+        """Return total number of tracked users."""
+        try:
+            row = self.db.fetchone("SELECT COUNT(*) FROM users")
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Failed to count users: {e}")
+            return 0
+
+    def list_user_downloads(self, user_id: int, offset: int = 0, limit: int = 10) -> list[dict]:
+        """Return download events for a user, newest first."""
+        try:
+            placeholders = ", ".join("?" * len(DOWNLOAD_EVENT_TYPES))
+            rows = self.db.fetchall(
+                f"""SELECT id, event_type, platform, video_format, url, title,
+                           success, timestamp, source
+                    FROM statistics
+                    WHERE user_id = ? AND event_type IN ({placeholders})
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT ? OFFSET ?""",
+                (user_id, *DOWNLOAD_EVENT_TYPES, limit, offset),
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "platform": row["platform"],
+                    "video_format": row["video_format"],
+                    "url": row["url"],
+                    "title": row["title"],
+                    "success": bool(row["success"]),
+                    "timestamp": row["timestamp"],
+                    "source": row["source"],
+                }
+                for row in rows or []
+            ]
+        except Exception as e:
+            logger.error(f"Failed to list downloads for user {user_id}: {e}")
+            return []
+
+    def count_user_downloads(self, user_id: int) -> int:
+        """Return total download events for a user (UI may cap at 50)."""
+        try:
+            placeholders = ", ".join("?" * len(DOWNLOAD_EVENT_TYPES))
+            row = self.db.fetchone(
+                f"""SELECT COUNT(*) FROM statistics
+                    WHERE user_id = ? AND event_type IN ({placeholders})""",
+                (user_id, *DOWNLOAD_EVENT_TYPES),
+            )
+            return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error(f"Failed to count downloads for user {user_id}: {e}")
+            return 0
 
     # === Report tracking ===
 
