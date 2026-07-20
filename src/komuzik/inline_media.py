@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from telethon import Button
 from telethon.errors import (
     ChatWriteForbiddenError,
     InputUserDeactivatedError,
@@ -88,9 +89,20 @@ async def stage_media_to_user(
 
 
 async def edit_inline_with_media(client: Any, inline_msg_id, sent_message) -> None:
-    """Replace inline placeholder with staged media (must already be on Telegram servers)."""
+    """Replace inline placeholder with staged media (must already be on Telegram servers).
+
+    Caption must be passed as the positional ``message`` argument, not ``text=``.
+    Telethon does ``text = text or message`` for inline IDs, so ``text=\"\"`` becomes
+    ``None`` and Telegram keeps the old «⏳ Загрузка…» caption (common for music
+    when title/@bot captions are disabled).
+    """
     caption = sent_message.message or ""
-    await client.edit_message(inline_msg_id, file=sent_message.media, text=caption)
+    await client.edit_message(
+        inline_msg_id,
+        caption,
+        file=sent_message.media,
+        buttons=Button.clear(),
+    )
 
 
 async def edit_inline_text(client: Any, inline_msg_id, text: str) -> None:
