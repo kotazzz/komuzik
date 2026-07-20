@@ -212,8 +212,20 @@ async def get_media_preview(url: str, fallback: str = "Медиа") -> tuple[str
         return fallback, None
 
 
-async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) -> list[dict]:
-    """Search for YouTube videos and return top results."""
+async def search_youtube(
+    query: str,
+    max_results: int = DEFAULT_SEARCH_RESULTS,
+    *,
+    offset: int = 0,
+) -> list[dict]:
+    """Search for YouTube videos and return a page of results.
+
+    ``offset`` skips the first N hits (page 2 → offset=10 with max_results=10).
+    """
+    if offset < 0:
+        offset = 0
+    if max_results < 1:
+        return []
     try:
         loop = asyncio.get_running_loop()
         ydl_opts = {
@@ -222,7 +234,8 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
             "default_search": "ytsearch",
         }
 
-        search_query = f"ytsearch{max_results}:{query}"
+        fetch_count = offset + max_results
+        search_query = f"ytsearch{fetch_count}:{query}"
 
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
             search_results = cast(
@@ -254,7 +267,7 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
                     }
                 )
 
-            return results
+            return results[offset : offset + max_results]
     except Exception as e:
         logger.error(f"Error searching YouTube: {e}")
         return []

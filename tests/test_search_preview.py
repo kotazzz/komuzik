@@ -1,4 +1,13 @@
-from komuzik.search_preview import fmt_compact, fmt_duration, render_search_preview
+from PIL import Image
+
+from komuzik.search_preview import (
+    THUMB_H,
+    THUMB_W,
+    _thumb_slot,
+    fmt_compact,
+    fmt_duration,
+    render_search_preview,
+)
 
 
 def test_fmt_compact():
@@ -13,7 +22,13 @@ def test_fmt_duration():
     assert fmt_duration(3661) == "1:01:01"
 
 
-def test_render_search_preview_smoke(tmp_path=None):
+def test_thumb_slot_always_fixed_size():
+    weird = Image.new("RGB", (100, 400), (255, 0, 0))
+    assert _thumb_slot(weird).size == (THUMB_W, THUMB_H)
+    assert _thumb_slot(None).size == (THUMB_W, THUMB_H)
+
+
+def test_render_search_preview_smoke():
     results = [
         {
             "title": "Test Video One",
@@ -32,8 +47,9 @@ def test_render_search_preview_smoke(tmp_path=None):
             "thumbnail": None,
         },
     ]
-    path = render_search_preview(results, "demo query")
+    path = render_search_preview(results, "demo query", start_index=11)
     assert path.exists()
     assert path.stat().st_size > 1000
+    assert THUMB_W == 320 and THUMB_H == 180
     path.unlink(missing_ok=True)
     path.parent.rmdir()

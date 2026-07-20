@@ -31,9 +31,11 @@ ICON_YT = "\uf167"
 
 WIDTH = 1080
 PAD = 28
+NUM_COL_W = 52
 THUMB_W = 320
 THUMB_H = 180
-ROW_H = 200
+TEXT_GAP = 28
+ROW_H = 208
 GAP = 16
 
 
@@ -85,13 +87,31 @@ def _fetch_image(url: str, timeout: float = 8.0) -> Image.Image | None:
 
 
 def _fit_cover(img: Image.Image, tw: int, th: int) -> Image.Image:
+    """Scale+crop to exactly tw×th (cover)."""
     src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        return Image.new("RGB", (tw, th), (60, 60, 60))
     scale = max(tw / src_w, th / src_h)
-    nw, nh = int(src_w * scale), int(src_h * scale)
+    nw, nh = max(1, int(round(src_w * scale))), max(1, int(round(src_h * scale)))
     resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
-    left = (nw - tw) // 2
-    top = (nh - th) // 2
-    return resized.crop((left, top, left + tw, top + th))
+    left = max(0, (nw - tw) // 2)
+    top = max(0, (nh - th) // 2)
+    cropped = resized.crop((left, top, left + tw, top + th))
+    if cropped.size != (tw, th):
+        slot = Image.new("RGB", (tw, th), (40, 40, 40))
+        slot.paste(cropped, (0, 0))
+        return slot
+    return cropped
+
+
+def _thumb_slot(thumb_img: Image.Image | None) -> Image.Image:
+    """Always return a THUMB_W×THUMB_H RGB image."""
+    slot = Image.new("RGB", (THUMB_W, THUMB_H), (45, 45, 45))
+    if thumb_img is None:
+        return slot
+    fitted = _fit_cover(thumb_img.convert("RGB"), THUMB_W, THUMB_H)
+    slot.paste(fitted, (0, 0))
+    return slot
 
 
 def _wrap_text(
@@ -124,7 +144,12 @@ def _wrap_text(
     return lines
 
 
-def render_search_preview(results: list[dict], query: str) -> Path:
+def render_search_preview(
+    results: list[dict],
+    query: str,
+    *,
+    start_index: int = 1,
+) -> Path:
     """Render a YouTube-like vertical list of search hits into a PNG file."""
     n = max(len(results), 1)
     header_h = 90
@@ -144,36 +169,43 @@ def render_search_preview(results: list[dict], query: str) -> Path:
     if len(q) > 60:
         q = q[:57] + "…"
     draw.text((PAD + 160, 28), q, font=title_font, fill=TEXT)
-    draw.text((PAD, 60), f"{len(results)} результатов", font=small_font, fill=MUTED)
+    end_index = start_index + len(results) - 1 if results else start_index - 1
+    draw.text(
+        (PAD, 60),
+        f"Результаты {start_index}–{max(end_index, start_index - 1)} · {len(results)} на странице",
+        font=small_font,
+        fill=MUTED,
+    )
 
-    text_x = PAD + THUMB_W + 24
-    text_max_w = WIDTH - text_x - PAD
+    thumb_x = PAD + NUM_COL_W
+    text_x = thumb_x + THUMB_W + TEXT_GAP
+    text_max_w = max(120, WIDTH - text_x - PAD)
 
     for i, item in enumerate(results):
         y = header_h + i * ROW_H
         _rounded_rect(draw, (PAD, y, WIDTH - PAD, y + ROW_H - GAP), 14, CARD)
 
-        # index
-        draw.text((PAD + 10, y + 12), f"{i + 1}", font=num_font, fill=MUTED)
+        # index (left column, does not overlap thumb)
+        num = str(start_index + i)
+        nw, _ = _text_size(draw, num, num_font)
+        draw.text(
+            (PAD + (NUM_COL_W - nw) // 2, y + (ROW_H - GAP) // 2 - 12),
+            num,
+            font=num_font,
+            fill=MUTED,
+        )
 
-        thumb_x = PAD + 36
         thumb_y = y + (ROW_H - GAP - THUMB_H) // 2
         thumb_url = item.get("thumbnail")
-        thumb_img = None
-        if isinstance(thumb_url, str) and thumb_url:
-            thumb_img = _fetch_image(thumb_url)
-        if thumb_img is None:
-            placeholder = Image.new("RGB", (THUMB_W, THUMB_H), (60, 60, 60))
-            thumb_img = placeholder
-        else:
-            thumb_img = _fit_cover(thumb_img, THUMB_W, THUMB_H)
+        raw = _fetch_image(thumb_url) if isinstance(thumb_url, str) and thumb_url else None
+        thumb_img = _thumb_slot(raw)
         img.paste(thumb_img, (thumb_x, thumb_y))
 
-        # duration badge
+        # duration badge on thumb
         dur = fmt_duration(item.get("duration"))
         dw, dh = _text_size(draw, dur, badge_font)
-        bx2 = thumb_x + THUMB_W - 10
-        by2 = thumb_y + THUMB_H - 10
+        bx2 = thumb_x + THUMB_W - 8
+        by2 = thumb_y + THUMB_H - 8
         bx1 = bx2 - dw - 14
         by1 = by2 - dh - 10
         _rounded_rect(draw, (bx1, by1, bx2, by2), 6, BADGE_BG)
@@ -203,7 +235,15 @@ def render_search_preview(results: list[dict], query: str) -> Path:
     return out
 
 
-async def render_search_preview_async(results: list[dict], query: str) -> Path:
+async def render_search_preview_async(
+    results: list[dict],
+    query: str,
+    *,
+    start_index: int = 1,
+) -> Path:
     """Run collage render off the event loop."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, render_search_preview, results, query)
+    return await loop.run_in_executor(
+        None,
+        lambda: render_search_preview(results, query, start_index=start_index),
+    )

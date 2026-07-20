@@ -662,7 +662,8 @@ class BotHandlers:
         self.stats.track_search(user_id, username)
 
         searching_msg = await event.respond(f"🔍 Поиск: {query}...")
-        results = await search_youtube(query, max_results=DEFAULT_SEARCH_RESULTS)
+        page_size = DEFAULT_SEARCH_RESULTS
+        results = await search_youtube(query, max_results=page_size, offset=0)
 
         if not results:
             if searching_msg is not None:
@@ -670,31 +671,64 @@ class BotHandlers:
             return
 
         session_token = uuid.uuid4().hex[:16]
-        SEARCH_SESSIONS[session_token] = {"query": query, "results": results}
-
-        buttons = []
-        for i, result in enumerate(results, 1):
-            duration = int(result["duration"]) if result["duration"] else 0
-            duration_min = duration // 60
-            duration_sec = duration % 60
-            button_text = f"{i}. {result['title'][:50]}{'...' if len(result['title']) > 50 else ''} ({duration_min}:{duration_sec:02d})"
-            buttons.append(
-                [
-                    Button.inline(
-                        button_text, data=f"select_{self._store_callback_url(result['url'])}"
-                    )
-                ]
-            )
-        buttons.append(
-            [Button.inline("🖼 Показать превью", data=f"searchprev_{session_token}")]
-        )
+        SEARCH_SESSIONS[session_token] = {
+            "query": query,
+            "results": results,
+            "offset": 0,
+            "page_size": page_size,
+            "has_more": len(results) >= page_size,
+        }
 
         if searching_msg is not None:
             await searching_msg.edit(
-                f"Выберите видео из результатов поиска ({len(results)}):\n"
-                "Превью можно открыть отдельной кнопкой ниже.",
-                buttons=buttons,
+                self._format_search_page_text(session_token),
+                buttons=self._search_page_buttons(session_token),
             )
+
+    def _format_search_page_text(self, session_token: str) -> str:
+        session = SEARCH_SESSIONS.get(session_token) or {}
+        results = list(session.get("results") or [])
+        offset = int(session.get("offset") or 0)
+        start = offset + 1
+        end = offset + len(results)
+        return (
+            f"Выберите видео ({start}–{end}):\n"
+            "Превью — отдельной кнопкой. «Ещё 10» подгружает следующую страницу."
+        )
+
+    def _search_page_buttons(self, session_token: str) -> list:
+        session = SEARCH_SESSIONS.get(session_token) or {}
+        results = list(session.get("results") or [])
+        offset = int(session.get("offset") or 0)
+        page_size = int(session.get("page_size") or DEFAULT_SEARCH_RESULTS)
+
+        buttons: list = []
+        for i, result in enumerate(results):
+            num = offset + i + 1
+            duration = int(result["duration"]) if result.get("duration") else 0
+            duration_min = duration // 60
+            duration_sec = duration % 60
+            title = str(result.get("title") or "Без названия")
+            button_text = (
+                f"{num}. {title[:48]}{'...' if len(title) > 48 else ''}"
+                f" ({duration_min}:{duration_sec:02d})"
+            )
+            buttons.append(
+                [
+                    Button.inline(
+                        button_text,
+                        data=f"select_{self._store_callback_url(str(result['url']))}",
+                    )
+                ]
+            )
+
+        nav: list = [
+            Button.inline("🖼 Превью", data=f"searchprev_{session_token}"),
+        ]
+        if session.get("has_more"):
+            nav.append(Button.inline("➡️ Ещё 10", data=f"searchmore_{session_token}"))
+        buttons.append(nav)
+        return buttons
 
     async def message_handler(self, event: Message):
         """Handle incoming messages with YouTube, TikTok, Twitter and Pinterest links."""
@@ -1625,7 +1659,10 @@ class BotHandlers:
             status = await event.respond("⏳ Собираю превью…")
             enriched = await enrich_youtube_search_stats(results, timeout=12.0)
             session["results"] = enriched
-            image_path = await render_search_preview_async(enriched, query)
+            start_index = int(session.get("offset") or 0) + 1
+            image_path = await render_search_preview_async(
+                enriched, query, start_index=start_index
+            )
             reply_to = None
             try:
                 origin = await event.get_message()
@@ -1659,6 +1696,39 @@ class BotHandlers:
                     shutil.rmtree(image_path.parent, ignore_errors=True)
                 except Exception:
                     pass
+
+    async def _handle_search_more_callback(self, event, data: str):
+        """Load the next page of /search results."""
+        token = data.removeprefix("searchmore_")
+        session = SEARCH_SESSIONS.get(token)
+        if not session:
+            await event.answer("Сессия поиска устарела — повторите /search.", alert=True)
+            return
+
+        query = str(session.get("query") or "")
+        page_size = int(session.get("page_size") or DEFAULT_SEARCH_RESULTS)
+        offset = int(session.get("offset") or 0) + page_size
+
+        await event.answer("Ищу ещё…")
+        results = await search_youtube(query, max_results=page_size, offset=offset)
+        if not results:
+            session["has_more"] = False
+            try:
+                await event.edit(
+                    self._format_search_page_text(token) + "\n\nБольше результатов нет.",
+                    buttons=self._search_page_buttons(token),
+                )
+            except Exception:
+                await event.answer("Больше результатов нет.", alert=True)
+            return
+
+        session["offset"] = offset
+        session["results"] = results
+        session["has_more"] = len(results) >= page_size
+        await event.edit(
+            self._format_search_page_text(token),
+            buttons=self._search_page_buttons(token),
+        )
 
     async def _handle_content_callback(self, event, data: str):
         """Handle content type selection (video/audio/repeat last)."""
@@ -2670,6 +2740,7 @@ class BotHandlers:
         handlers: dict[str, CallbackHandler] = {
             "select_": self._handle_select_callback,
             "searchprev_": self._handle_search_preview_callback,
+            "searchmore_": self._handle_search_more_callback,
             "content_": self._handle_content_callback,
             "quality_": self._handle_quality_callback,
             "audio_": self._handle_audio_callback,
