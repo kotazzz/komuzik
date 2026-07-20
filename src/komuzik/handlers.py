@@ -2859,7 +2859,7 @@ class BotHandlers:
         )
         await event.answer("Сохранено")
 
-    def _safe_inline_answer(self, event, articles: list) -> None:
+    async def _safe_inline_answer(self, event, articles: list) -> None:
         """Answer inline query; ignore stale query_id and log other failures."""
         # Note: no thumbs/gallery here — preview collage exists only in DM /search.
         try:
