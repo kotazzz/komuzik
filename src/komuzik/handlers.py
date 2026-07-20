@@ -54,7 +54,7 @@ from .playlist import (
     parse_exclusion_ops,
     selected_entries,
 )
-from .repository import StatsRepository
+from .repository import StatsRepository, format_download_history_line, format_user_label
 from .stats_infographic import get_stats_image
 from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 
@@ -63,6 +63,9 @@ logger = logging.getLogger(__name__)
 # States for /report command state machine
 REPORT_STATES = {}
 ADMIN_PENDING: dict[int, str] = {}
+ADMIN_USERS_PAGE_SIZE = 15
+ADMIN_HISTORY_PAGE_SIZE = 10
+ADMIN_HISTORY_MAX = 50
 PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
@@ -144,6 +147,8 @@ class BotHandlers:
         self.client.on(events.NewMessage(pattern=r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?"))(
             self.unsetuserlimit_handler
         )
+        self.client.on(events.NewMessage(pattern=r"^/users(?:@\w+)?"))(self.users_handler)
+        self.client.on(events.NewMessage(pattern=r"^/user(?:@\w+)?(?:\s+(.+))?"))(self.user_handler)
         self.client.on(events.NewMessage(pattern="/report"))(self.report_handler)
         self.client.on(events.NewMessage(pattern=r"^/search(?:\s+(.+))?"))(self.search_handler)
         self.client.on(events.NewMessage())(self.message_handler)
@@ -1955,8 +1960,142 @@ class BotHandlers:
             [
                 Button.inline("⚙️ Concurrent", data="admin_set_concurrent"),
                 Button.inline("📺 Playlist limit", data="admin_set_playlist"),
-            ]
+            ],
+            [Button.inline("👥 Пользователи", data="admin_users_p_0")],
         ]
+
+    def _admin_user_profile_link(self, user_id: int) -> str:
+        return f"[профиль](tg://user?id={user_id})"
+
+    def _truncate_button_label(self, label: str, max_len: int = 60) -> str:
+        if len(label) <= max_len:
+            return label
+        return label[: max_len - 3] + "..."
+
+    def _format_admin_users_page(self, page: int) -> tuple[str, list]:
+        offset = page * ADMIN_USERS_PAGE_SIZE
+        users = self.stats.list_users(offset=offset, limit=ADMIN_USERS_PAGE_SIZE)
+        total = self.stats.count_users()
+
+        if total == 0:
+            return "👥 **Пользователи**\n\nСписок пуст.", []
+
+        end = offset + len(users)
+        lines = [f"👥 **Пользователи** ({offset + 1}–{end} из {total})\n"]
+        for user in users:
+            label = format_user_label(user)
+            lines.append(f"• {label} · {self._admin_user_profile_link(user['id'])}")
+
+        buttons: list[list] = []
+        for user in users:
+            btn_label = self._truncate_button_label(format_user_label(user))
+            buttons.append([Button.inline(btn_label, data=f"admin_user_{user['id']}")])
+
+        nav: list = []
+        if page > 0:
+            nav.append(Button.inline("◀️", data=f"admin_users_p_{page - 1}"))
+        if end < total:
+            nav.append(Button.inline("▶️", data=f"admin_users_p_{page + 1}"))
+        if nav:
+            buttons.append(nav)
+
+        return "\n".join(lines), buttons
+
+    def _format_admin_history_page(self, target_user_id: int, page: int) -> tuple[str | None, list]:
+        user = self.stats.get_user(target_user_id)
+        total_raw = self.stats.count_user_downloads(target_user_id)
+        total = min(total_raw, ADMIN_HISTORY_MAX)
+
+        if total == 0 and user is None:
+            return None, []
+
+        max_page = max(0, (total - 1) // ADMIN_HISTORY_PAGE_SIZE) if total > 0 else 0
+        page = min(max(page, 0), max_page)
+        offset = page * ADMIN_HISTORY_PAGE_SIZE
+        remaining = max(0, total - offset)
+        limit = min(ADMIN_HISTORY_PAGE_SIZE, remaining)
+        downloads = (
+            self.stats.list_user_downloads(target_user_id, offset=offset, limit=limit)
+            if limit > 0
+            else []
+        )
+
+        user_record = user or {"id": target_user_id}
+        lines = [
+            "📥 **История загрузок**\n",
+            f"👤 {format_user_label(user_record)}",
+            f"ID: `{target_user_id}` · {self._admin_user_profile_link(target_user_id)}",
+        ]
+
+        ban_reason = self.stats.get_ban(target_user_id)
+        if ban_reason:
+            lines.append(f"🚫 **Забанен:** {ban_reason}")
+
+        if total == 0:
+            lines.append("\nНет загрузок.")
+        else:
+            lines.append(f"\nЗаписи {offset + 1}–{offset + len(downloads)} из {total}:\n")
+            lines.extend(format_download_history_line(row) for row in downloads)
+
+        buttons: list[list] = []
+        nav: list = []
+        if page > 0:
+            nav.append(
+                Button.inline("◀️", data=f"admin_hist_{target_user_id}_p_{page - 1}")
+            )
+        if offset + len(downloads) < total:
+            nav.append(
+                Button.inline("▶️", data=f"admin_hist_{target_user_id}_p_{page + 1}")
+            )
+        if nav:
+            buttons.append(nav)
+        buttons.append([Button.inline("← К списку", data="admin_users_p_0")])
+
+        return "\n".join(lines), buttons
+
+    async def _send_admin_users_page(self, event, page: int, *, edit: bool = False) -> None:
+        text, buttons = self._format_admin_users_page(page)
+        kwargs: dict[str, Any] = {"link_preview": False}
+        if buttons:
+            kwargs["buttons"] = buttons
+        if edit:
+            await event.edit(text, **kwargs)
+        else:
+            await event.respond(text, **kwargs)
+
+    async def _send_admin_history_page(
+        self, event, target_user_id: int, page: int, *, edit: bool = False
+    ) -> bool:
+        text, buttons = self._format_admin_history_page(target_user_id, page)
+        if text is None:
+            return False
+        kwargs: dict[str, Any] = {"link_preview": False}
+        if buttons:
+            kwargs["buttons"] = buttons
+        if edit:
+            await event.edit(text, **kwargs)
+        else:
+            await event.respond(text, **kwargs)
+        return True
+
+    async def users_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        await self._send_admin_users_page(event, 0)
+
+    async def user_handler(self, event: Message):
+        user_id, _ = self._get_user_info(event)
+        if not self._is_bot_admin(user_id):
+            return
+        text = getattr(event.message, "text", None) or ""
+        match = re.match(r"^/user(?:@\w+)?(?:\s+(.+))?", text)
+        target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
+        if target_id is None:
+            await event.respond("Использование: /user <user_id>")
+            return
+        if not await self._send_admin_history_page(event, target_id, 0):
+            await event.respond("Нет данных")
 
     async def admin_handler(self, event: Message):
         user_id, _ = self._get_user_info(event)
@@ -2224,6 +2363,44 @@ class BotHandlers:
             label = "concurrent" if data == "admin_set_concurrent" else "плейлист / сутки"
             await event.answer()
             await event.respond(f"Введите новое значение ({label}), целое число ≥ 1:")
+            return
+
+        if data.startswith("admin_users_p_"):
+            if user_id is None or not self._is_bot_admin(user_id):
+                await event.answer("Нет доступа.", alert=True)
+                return
+            page = int(data.removeprefix("admin_users_p_"))
+            text, buttons = self._format_admin_users_page(page)
+            kwargs: dict[str, Any] = {"link_preview": False}
+            if buttons:
+                kwargs["buttons"] = buttons
+            await event.edit(text, **kwargs)
+            await event.answer()
+            return
+
+        admin_user_match = re.fullmatch(r"admin_user_(\d+)", data)
+        if admin_user_match:
+            if user_id is None or not self._is_bot_admin(user_id):
+                await event.answer("Нет доступа.", alert=True)
+                return
+            target_id = int(admin_user_match.group(1))
+            if not await self._send_admin_history_page(event, target_id, 0, edit=True):
+                await event.answer("Нет данных", alert=True)
+                return
+            await event.answer()
+            return
+
+        admin_hist_match = re.fullmatch(r"admin_hist_(\d+)_p_(\d+)", data)
+        if admin_hist_match:
+            if user_id is None or not self._is_bot_admin(user_id):
+                await event.answer("Нет доступа.", alert=True)
+                return
+            target_id = int(admin_hist_match.group(1))
+            page = int(admin_hist_match.group(2))
+            if not await self._send_admin_history_page(event, target_id, page, edit=True):
+                await event.answer("Нет данных", alert=True)
+                return
+            await event.answer()
             return
 
         # Route callbacks using dictionary

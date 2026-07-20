@@ -702,6 +702,26 @@ class StatsRepository:
             logger.error(f"Failed to count users: {e}")
             return 0
 
+    def get_user(self, user_id: int) -> dict | None:
+        """Return one user row by id, or None."""
+        try:
+            row = self.db.fetchone(
+                """SELECT user_id, username, display_name, last_seen
+                   FROM users WHERE user_id = ?""",
+                (user_id,),
+            )
+            if not row:
+                return None
+            return {
+                "id": row["user_id"],
+                "username": row["username"],
+                "display_name": row["display_name"],
+                "last_seen": row["last_seen"],
+            }
+        except Exception as e:
+            logger.error(f"Failed to get user {user_id}: {e}")
+            return None
+
     def list_user_downloads(self, user_id: int, offset: int = 0, limit: int = 10) -> list[dict]:
         """Return download events for a user, newest first."""
         try:
