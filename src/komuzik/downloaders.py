@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -149,6 +150,49 @@ async def get_available_formats(url: str) -> list[int]:
 
 async def get_media_title(url: str, fallback: str = "Медиа") -> str:
     """Fetch a short title for inline results without downloading the file."""
+    title, _thumb = await get_media_preview(url, fallback=fallback)
+    return title
+
+
+def youtube_thumbnail_url(video_id: str | None) -> str | None:
+    """Build a stable YouTube thumbnail URL from an 11-char video id."""
+    if not video_id:
+        return None
+    vid = str(video_id).strip()
+    if not re.fullmatch(r"[\w-]{11}", vid):
+        return None
+    return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+
+def thumbnail_from_ydl_entry(entry: Mapping[str, Any]) -> str | None:
+    """Pick best available thumbnail URL from a yt-dlp entry."""
+    thumbs = entry.get("thumbnails")
+    if isinstance(thumbs, list):
+        best_url: str | None = None
+        best_score = -1
+        for item in thumbs:
+            if not isinstance(item, Mapping):
+                continue
+            url = item.get("url")
+            if not url:
+                continue
+            width = int(item.get("width") or 0)
+            height = int(item.get("height") or 0)
+            score = width * height
+            if score >= best_score:
+                best_score = score
+                best_url = str(url)
+        if best_url:
+            return best_url
+
+    thumb = entry.get("thumbnail")
+    if thumb:
+        return str(thumb)
+    return youtube_thumbnail_url(entry.get("id") if isinstance(entry.get("id"), str) else None)
+
+
+async def get_media_preview(url: str, fallback: str = "Медиа") -> tuple[str, str | None]:
+    """Fetch title and thumbnail URL for inline/search previews."""
     try:
         loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
@@ -159,10 +203,13 @@ async def get_media_title(url: str, fallback: str = "Медиа") -> str:
         title = str(title).strip()
         if len(title) > 64:
             title = title[:61] + "..."
-        return title or fallback
+        thumb = thumbnail_from_ydl_entry(info)
+        if not thumb:
+            thumb = youtube_thumbnail_url(info.get("id") if isinstance(info.get("id"), str) else None)
+        return (title or fallback), thumb
     except Exception as e:
-        logger.warning(f"Failed to get media title for {url}: {e}")
-        return fallback
+        logger.warning(f"Failed to get media preview for {url}: {e}")
+        return fallback, None
 
 
 async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) -> list[dict]:
@@ -190,13 +237,15 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
             for entry in entries:
                 if not isinstance(entry, Mapping):
                     continue
+                video_id = entry.get("id", "")
                 results.append(
                     {
-                        "id": entry.get("id", ""),
+                        "id": video_id,
                         "title": entry.get("title", "Unknown"),
-                        "url": f"https://www.youtube.com/watch?v={entry.get('id', '')}",
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
                         "duration": entry.get("duration", 0),
                         "channel": entry.get("channel", "Unknown"),
+                        "thumbnail": thumbnail_from_ydl_entry(entry),
                     }
                 )
 

@@ -28,7 +28,7 @@ from .downloaders import (
     download_youtube_audio,
     download_youtube_video,
     get_available_formats,
-    get_media_title,
+    get_media_preview,
     search_youtube,
     send_audio_content,
     send_image_content,
@@ -58,6 +58,7 @@ from .inline_media import (
     stage_media_to_user,
 )
 from .inline_query import ParsedInlineQuery, parse_inline_query
+from .inline_thumbs import input_web_thumb
 from .playlist import (
     PLAYLIST_BATCH_SIZE,
     PLAYLIST_PAGE_SIZE,
@@ -662,6 +663,29 @@ class BotHandlers:
             if searching_msg is not None:
                 await searching_msg.edit("Ничего не найдено. Попробуйте изменить запрос.")
             return
+
+        album_files: list[str] = []
+        album_captions: list[str] = []
+        for i, result in enumerate(results, 1):
+            thumb = result.get("thumbnail")
+            if not isinstance(thumb, str) or not thumb:
+                continue
+            title = str(result.get("title") or "Без названия")
+            if len(title) > 180:
+                title = title[:177] + "..."
+            album_files.append(thumb)
+            album_captions.append(f"{i}. {title}")
+
+        if album_files:
+            try:
+                await self.client.send_file(
+                    event.chat_id,
+                    album_files,
+                    caption=album_captions,
+                    reply_to=event.message.id if event.message else None,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send search preview album: {e}")
 
         buttons = []
         for i, result in enumerate(results, 1):
@@ -2746,15 +2770,17 @@ class BotHandlers:
         builder = event.builder
 
         if parsed:
-            title = await get_media_title(parsed.url, fallback=parsed.description)
+            title, thumb_url = await get_media_preview(parsed.url, fallback=parsed.description)
             token = uuid.uuid4().hex[:16]
             INLINE_JOBS[token] = parsed
+            thumb = input_web_thumb(thumb_url) if thumb_url else None
             result = await builder.article(
                 title=title,
                 description=parsed.description,
                 text="⏳ Загрузка…",
                 buttons=[Button.inline("⏳", b"noop")],
                 id=token,
+                thumb=thumb,
             )
             await event.answer([result], cache_time=0)
             return
@@ -2812,6 +2838,9 @@ class BotHandlers:
             if len(description) > 64:
                 description = description[:61] + "..."
 
+            thumb_url = item.get("thumbnail")
+            thumb = input_web_thumb(str(thumb_url)) if isinstance(thumb_url, str) and thumb_url else None
+
             articles.append(
                 await builder.article(
                     title=title,
@@ -2819,6 +2848,7 @@ class BotHandlers:
                     text="⏳ Загрузка…",
                     buttons=[Button.inline("⏳", b"noop")],
                     id=token,
+                    thumb=thumb,
                 )
             )
 
@@ -2833,7 +2863,7 @@ class BotHandlers:
             await event.answer([empty], cache_time=0)
             return
 
-        await event.answer(articles, cache_time=0)
+        await event.answer(articles, cache_time=0, gallery=True)
 
     async def chosen_inline_handler(self, event: UpdateBotInlineSend):
         """Download media after user picks an inline result and edit the via-message."""
