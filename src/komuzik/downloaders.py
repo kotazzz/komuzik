@@ -244,8 +244,13 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
                         "title": entry.get("title", "Unknown"),
                         "url": f"https://www.youtube.com/watch?v={video_id}",
                         "duration": entry.get("duration", 0),
-                        "channel": entry.get("channel", "Unknown"),
+                        "channel": entry.get("channel")
+                        or entry.get("uploader")
+                        or entry.get("channel_id")
+                        or "Unknown",
                         "thumbnail": thumbnail_from_ydl_entry(entry),
+                        "view_count": entry.get("view_count"),
+                        "like_count": entry.get("like_count"),
                     }
                 )
 
@@ -253,6 +258,54 @@ async def search_youtube(query: str, max_results: int = DEFAULT_SEARCH_RESULTS) 
     except Exception as e:
         logger.error(f"Error searching YouTube: {e}")
         return []
+
+
+async def enrich_youtube_search_stats(results: list[dict], *, timeout: float = 12.0) -> list[dict]:
+    """Fill missing view/like counts via lightweight extract (best-effort)."""
+    if not results:
+        return results
+
+    async def _one(item: dict) -> dict:
+        if item.get("view_count") is not None and item.get("like_count") is not None:
+            return item
+        url = item.get("url")
+        if not isinstance(url, str) or not url:
+            return item
+        try:
+            loop = asyncio.get_running_loop()
+            ydl_opts = {**YDLP_BASE_OPTS, "skip_download": True}
+
+            def _extract() -> dict[str, Any]:
+                with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                return cast("dict[str, Any]", info or {})
+
+            info = await loop.run_in_executor(None, _extract)
+            updated = dict(item)
+            if updated.get("view_count") is None and info.get("view_count") is not None:
+                updated["view_count"] = info.get("view_count")
+            if updated.get("like_count") is None and info.get("like_count") is not None:
+                updated["like_count"] = info.get("like_count")
+            if (not updated.get("channel") or updated.get("channel") == "Unknown") and (
+                info.get("channel") or info.get("uploader")
+            ):
+                updated["channel"] = info.get("channel") or info.get("uploader")
+            if not updated.get("thumbnail"):
+                updated["thumbnail"] = thumbnail_from_ydl_entry(info)
+            return updated
+        except Exception as e:
+            logger.debug(f"enrich stats failed for {url}: {e}")
+            return item
+
+    try:
+        enriched = await asyncio.wait_for(
+            asyncio.gather(*[_one(item) for item in results]),
+            timeout=timeout,
+        )
+        return list(enriched)
+    except TimeoutError:
+        logger.warning("enrich_youtube_search_stats timed out")
+        return results
 
 
 def _extract_metadata(info: Mapping[str, Any], title: str) -> tuple[str, str]:

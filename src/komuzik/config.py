@@ -75,7 +75,7 @@ YOUTUBE_SETTINGS = _config.get_section("youtube")
 VIDEO_FALLBACK_QUALITIES = YOUTUBE_SETTINGS.get(
     "video_fallback_qualities", [1080, 720, 480, 360, 240]
 )
-DEFAULT_SEARCH_RESULTS = YOUTUBE_SETTINGS.get("default_search_results", 5)
+DEFAULT_SEARCH_RESULTS = YOUTUBE_SETTINGS.get("default_search_results", 10)
 
 # ============= TikTok Settings =============
 TIKTOK_SETTINGS = _config.get_section("tiktok")

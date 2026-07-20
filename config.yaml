@@ -47,7 +47,7 @@ pinterest:
 # Параметры YouTube
 youtube:
   # Максимальное количество результатов поиска
-  default_search_results: 5
+  default_search_results: 10
   
   # Качества видео для выбора (в порядке убывания)
   video_fallback_qualities:

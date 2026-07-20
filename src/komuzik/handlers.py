@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import uuid
+from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -13,6 +14,7 @@ from telethon.tl.custom import Message
 from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
+    DEFAULT_SEARCH_RESULTS,
     MSG_PRIVACY,
     MSG_START,
     PINTEREST_REGEX,
@@ -27,6 +29,7 @@ from .downloaders import (
     download_twitter_video,
     download_youtube_audio,
     download_youtube_video,
+    enrich_youtube_search_stats,
     get_available_formats,
     get_media_preview,
     search_youtube,
@@ -70,6 +73,7 @@ from .playlist import (
     selected_entries,
 )
 from .repository import StatsRepository, format_download_history_line, format_user_label
+from .search_preview import render_search_preview_async
 from .stats_infographic import get_stats_image
 from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 from .user_errors import format_download_error
@@ -87,6 +91,7 @@ ADMIN_USERS_KIND_ANON = "anon"
 PLAYLIST_STATES: dict[int, PlaylistSession] = {}
 CALLBACK_URLS: dict[str, str] = {}
 INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
+SEARCH_SESSIONS: dict[str, dict[str, Any]] = {}
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -657,35 +662,15 @@ class BotHandlers:
         self.stats.track_search(user_id, username)
 
         searching_msg = await event.respond(f"🔍 Поиск: {query}...")
-        results = await search_youtube(query, max_results=5)
+        results = await search_youtube(query, max_results=DEFAULT_SEARCH_RESULTS)
 
         if not results:
             if searching_msg is not None:
                 await searching_msg.edit("Ничего не найдено. Попробуйте изменить запрос.")
             return
 
-        album_files: list[str] = []
-        album_captions: list[str] = []
-        for i, result in enumerate(results, 1):
-            thumb = result.get("thumbnail")
-            if not isinstance(thumb, str) or not thumb:
-                continue
-            title = str(result.get("title") or "Без названия")
-            if len(title) > 180:
-                title = title[:177] + "..."
-            album_files.append(thumb)
-            album_captions.append(f"{i}. {title}")
-
-        if album_files:
-            try:
-                await self.client.send_file(
-                    event.chat_id,
-                    album_files,
-                    caption=album_captions,
-                    reply_to=event.message.id if event.message else None,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send search preview album: {e}")
+        session_token = uuid.uuid4().hex[:16]
+        SEARCH_SESSIONS[session_token] = {"query": query, "results": results}
 
         buttons = []
         for i, result in enumerate(results, 1):
@@ -700,9 +685,16 @@ class BotHandlers:
                     )
                 ]
             )
+        buttons.append(
+            [Button.inline("🖼 Показать превью", data=f"searchprev_{session_token}")]
+        )
 
         if searching_msg is not None:
-            await searching_msg.edit("Выберите видео из результатов поиска:", buttons=buttons)
+            await searching_msg.edit(
+                f"Выберите видео из результатов поиска ({len(results)}):\n"
+                "Превью можно открыть отдельной кнопкой ниже.",
+                buttons=buttons,
+            )
 
     async def message_handler(self, event: Message):
         """Handle incoming messages with YouTube, TikTok, Twitter and Pinterest links."""
@@ -1615,6 +1607,58 @@ class BotHandlers:
             return
         CALLBACK_URLS.pop(token, None)
         await self._show_content_type_selection(event, url)
+
+    async def _handle_search_preview_callback(self, event, data: str):
+        """Render and send a YouTube-like Pillow collage for /search results."""
+        token = data.removeprefix("searchprev_")
+        session = SEARCH_SESSIONS.get(token)
+        if not session:
+            await event.answer("Сессия поиска устарела — повторите /search.", alert=True)
+            return
+
+        await event.answer()
+        results = list(session.get("results") or [])
+        query = str(session.get("query") or "")
+        image_path: Path | None = None
+        status = None
+        try:
+            status = await event.respond("⏳ Собираю превью…")
+            enriched = await enrich_youtube_search_stats(results, timeout=12.0)
+            session["results"] = enriched
+            image_path = await render_search_preview_async(enriched, query)
+            reply_to = None
+            try:
+                origin = await event.get_message()
+                if origin is not None:
+                    reply_to = origin.id
+            except Exception:
+                pass
+            await self.client.send_file(
+                event.chat_id,
+                str(image_path),
+                caption=f"🖼 Превью поиска: {query}",
+                reply_to=reply_to,
+            )
+            if status is not None:
+                try:
+                    await status.delete()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Failed to render search preview: {e}")
+            if status is not None:
+                try:
+                    await status.edit("Не удалось собрать превью.")
+                except Exception:
+                    pass
+            else:
+                await event.answer("Не удалось собрать превью.", alert=True)
+        finally:
+            if image_path is not None:
+                try:
+                    shutil.rmtree(image_path.parent, ignore_errors=True)
+                except Exception:
+                    pass
 
     async def _handle_content_callback(self, event, data: str):
         """Handle content type selection (video/audio/repeat last)."""
@@ -2625,6 +2669,7 @@ class BotHandlers:
         # Route callbacks using dictionary
         handlers: dict[str, CallbackHandler] = {
             "select_": self._handle_select_callback,
+            "searchprev_": self._handle_search_preview_callback,
             "content_": self._handle_content_callback,
             "quality_": self._handle_quality_callback,
             "audio_": self._handle_audio_callback,
@@ -2805,7 +2850,7 @@ class BotHandlers:
             self.stats.track_user(user_id, username)
             self.stats.track_search(user_id, username)
 
-        results = await search_youtube(query, max_results=5)
+        results = await search_youtube(query, max_results=DEFAULT_SEARCH_RESULTS)
         if not results:
             empty = await builder.article(
                 title="Ничего не найдено",
