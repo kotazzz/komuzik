@@ -116,6 +116,7 @@ class Database:
                 user_id INTEGER PRIMARY KEY,
                 show_bot_caption INTEGER NOT NULL DEFAULT 1,
                 show_title INTEGER NOT NULL DEFAULT 1,
+                default_quality TEXT NOT NULL DEFAULT '720p',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -130,9 +131,13 @@ class Database:
                 allow_pinterest INTEGER NOT NULL DEFAULT 1,
                 show_bot_caption INTEGER NOT NULL DEFAULT 1,
                 show_title INTEGER NOT NULL DEFAULT 1,
+                default_quality TEXT NOT NULL DEFAULT '720p',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        self._ensure_column(cursor, "user_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
+        self._ensure_column(cursor, "chat_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -164,6 +169,15 @@ class Database:
         if "source" not in columns:
             cursor.execute("ALTER TABLE statistics ADD COLUMN source TEXT")
             logger.info("Migrated statistics table: added source column")
+
+    def _ensure_column(
+        self, cursor: sqlite3.Cursor, table: str, column: str, column_def: str
+    ) -> None:
+        """Add a column to an existing table if missing."""
+        columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+            logger.info(f"Migrated {table}: added {column}")
 
     def close(self):
         """Close database connection."""

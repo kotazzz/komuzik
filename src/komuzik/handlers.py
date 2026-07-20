@@ -273,10 +273,12 @@ class BotHandlers:
         bot_state = "✅ Вкл" if settings.show_bot_caption else "❌ Выкл"
         title_state = "✅ Вкл" if settings.show_title else "❌ Выкл"
         return (
-            "⚙️ **Настройки подписи**\n\n"
+            "⚙️ **Личные настройки**\n\n"
             f"🤖 Подпись бота (@{self.bot_username or 'bot'}): {bot_state}\n"
-            f"📝 Название видео: {title_state}\n\n"
-            "По умолчанию оба пункта включены."
+            f"📝 Название видео: {title_state}\n"
+            f"📺 Качество (инлайн): **{settings.default_quality}**\n\n"
+            "Качество влияет на инлайн без префикса. "
+            "В ЛС по ссылке выбор формата как раньше."
         )
 
     def _settings_buttons(self, settings):
@@ -289,7 +291,44 @@ class BotHandlers:
         return [
             [Button.inline(bot_label, data="settings_bot")],
             [Button.inline(title_label, data="settings_title")],
+            [Button.inline("📺 Качество по умолчанию", data="settings_quality")],
         ]
+
+    def _format_quality_settings_message(self, current_quality: str, *, scope: str) -> str:
+        scope_line = (
+            "для **инлайна** (личные настройки)"
+            if scope == "user"
+            else "для **этой группы** (автозагрузка)"
+        )
+        return (
+            f"📺 **Качество по умолчанию** {scope_line}\n\n"
+            "Сейчас: **"
+            f"{current_quality}**\n\n"
+            "Ориентир размера (ролик ~3–5 мин):\n"
+            "• 360p — ~5–15 МБ\n"
+            "• 480p — ~15–30 МБ\n"
+            "• 720p — ~30–60 МБ\n"
+            "• 1080p — ~60–120+ МБ\n\n"
+            "⚠️ Не ставьте высокое качество без нужды — "
+            "файлы быстро забивают память телефона.\n\n"
+            "Префикс в запросе (`480`, `music`…) всегда важнее этого дефолта."
+        )
+
+    def _quality_settings_buttons(self, current_quality: str, *, prefix: str) -> list:
+        """Build quality picker. prefix is 'settings_q_' or 'chatset_q_'."""
+        row: list = []
+        buttons: list = []
+        for q in ("360p", "480p", "720p", "1080p"):
+            mark = "✅ " if q == current_quality else ""
+            row.append(Button.inline(f"{mark}{q}", data=f"{prefix}{q}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        back = "settings_back" if prefix.startswith("settings_") else "chatset_back"
+        buttons.append([Button.inline("← Назад", data=back)])
+        return buttons
 
     def _format_chat_settings_message(self, settings) -> str:
         def state(on: bool) -> str:
@@ -302,7 +341,8 @@ class BotHandlers:
             f"𝕏 Twitter/X: {state(settings.allow_twitter)}\n"
             f"📌 Pinterest: {state(settings.allow_pinterest)}\n\n"
             f"🤖 Подпись бота: {state(settings.show_bot_caption)}\n"
-            f"📝 Название видео: {state(settings.show_title)}\n\n"
+            f"📝 Название видео: {state(settings.show_title)}\n"
+            f"📺 Качество YouTube: **{settings.default_quality}**\n\n"
             "Выключенные платформы бот игнорирует. Только для этой группы."
         )
 
@@ -338,6 +378,7 @@ class BotHandlers:
                     data="chatset_show_title",
                 ),
             ],
+            [Button.inline("📺 Качество по умолчанию", data="chatset_quality")],
         ]
 
     async def stats_handler(self, event: Message):
@@ -514,12 +555,12 @@ class BotHandlers:
         if bool(getattr(event, "out", False)):
             return
 
-        parsed = parse_inline_query(text)
+        chat_id = int(event.chat_id)
+        chat_settings = self.stats.get_chat_settings(chat_id)
+        parsed = parse_inline_query(text, default_quality=chat_settings.default_quality)
         if parsed is None:
             return
 
-        chat_id = int(event.chat_id)
-        chat_settings = self.stats.get_chat_settings(chat_id)
         if not chat_settings.allows_platform(parsed.platform):
             return
 
@@ -1177,10 +1218,38 @@ class BotHandlers:
         logger.warning(f"Unknown callback data: {data}")
 
     async def _handle_settings_callback(self, event, data: str):
-        """Toggle caption settings from inline buttons."""
+        """Toggle personal settings / open quality screen."""
         user_id = cast("int | None", event.sender_id)
         if user_id is None:
             await event.answer("Не удалось определить пользователя.", alert=True)
+            return
+
+        if data == "settings_quality":
+            settings = self.stats.get_user_settings(user_id)
+            await event.edit(
+                self._format_quality_settings_message(settings.default_quality, scope="user"),
+                buttons=self._quality_settings_buttons(settings.default_quality, prefix="settings_q_"),
+            )
+            await event.answer()
+            return
+
+        if data == "settings_back":
+            settings = self.stats.get_user_settings(user_id)
+            await event.edit(
+                self._format_settings_message(settings),
+                buttons=self._settings_buttons(settings),
+            )
+            await event.answer()
+            return
+
+        if data.startswith("settings_q_"):
+            quality = data.removeprefix("settings_q_")
+            settings = self.stats.set_user_default_quality(user_id, quality)
+            await event.edit(
+                self._format_quality_settings_message(settings.default_quality, scope="user"),
+                buttons=self._quality_settings_buttons(settings.default_quality, prefix="settings_q_"),
+            )
+            await event.answer(f"Качество: {settings.default_quality}")
             return
 
         key = "show_bot_caption" if data == "settings_bot" else None
@@ -1203,6 +1272,36 @@ class BotHandlers:
             await event.answer("Только администраторы могут менять настройки.", alert=True)
             return
 
+        chat_id = int(event.chat_id)
+
+        if data == "chatset_quality":
+            settings = self.stats.get_chat_settings(chat_id)
+            await event.edit(
+                self._format_quality_settings_message(settings.default_quality, scope="chat"),
+                buttons=self._quality_settings_buttons(settings.default_quality, prefix="chatset_q_"),
+            )
+            await event.answer()
+            return
+
+        if data == "chatset_back":
+            settings = self.stats.get_chat_settings(chat_id)
+            await event.edit(
+                self._format_chat_settings_message(settings),
+                buttons=self._chat_settings_buttons(settings),
+            )
+            await event.answer()
+            return
+
+        if data.startswith("chatset_q_"):
+            quality = data.removeprefix("chatset_q_")
+            settings = self.stats.set_chat_default_quality(chat_id, quality)
+            await event.edit(
+                self._format_quality_settings_message(settings.default_quality, scope="chat"),
+                buttons=self._quality_settings_buttons(settings.default_quality, prefix="chatset_q_"),
+            )
+            await event.answer(f"Качество: {settings.default_quality}")
+            return
+
         key = data.removeprefix("chatset_")
         if key not in {
             "allow_youtube",
@@ -1215,7 +1314,6 @@ class BotHandlers:
             await event.answer()
             return
 
-        chat_id = int(event.chat_id)
         settings = self.stats.toggle_chat_setting(chat_id, key)
         await event.edit(
             self._format_chat_settings_message(settings),
@@ -1226,7 +1324,11 @@ class BotHandlers:
     async def inline_query_handler(self, event):
         """Answer inline queries with a placeholder article for supported links."""
         query_text = event.text or ""
-        parsed = parse_inline_query(query_text)
+        user_id = cast("int | None", event.sender_id)
+        default_quality = "720p"
+        if user_id is not None:
+            default_quality = self.stats.get_user_settings(user_id).default_quality
+        parsed = parse_inline_query(query_text, default_quality=default_quality)
         builder = event.builder
 
         if not parsed:

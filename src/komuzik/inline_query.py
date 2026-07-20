@@ -30,14 +30,22 @@ def _normalize_url(raw: str) -> str:
     return url
 
 
-def parse_inline_query(text: str) -> ParsedInlineQuery | None:
+def parse_inline_query(
+    text: str,
+    *,
+    default_quality: str = DEFAULT_YOUTUBE_QUALITY,
+) -> ParsedInlineQuery | None:
     """Parse inline query into URL, platform, mode and quality.
 
     Supports YouTube prefixes: music/audio, 360/480/720/1080.
     Other platforms ignore prefixes.
+    ``default_quality`` is used for YouTube video when no height/audio prefix is set.
     """
     if not text or not text.strip():
         return None
+
+    if default_quality not in {f"{h}p" for h in ALLOWED_HEIGHTS}:
+        default_quality = DEFAULT_YOUTUBE_QUALITY
 
     tokens = text.strip().split()
     prefixes: list[str] = []
@@ -107,7 +115,7 @@ def parse_inline_query(text: str) -> ParsedInlineQuery | None:
         )
 
     mode = "video"
-    quality = DEFAULT_YOUTUBE_QUALITY
+    quality = default_quality
 
     for prefix in prefixes:
         if prefix in AUDIO_PREFIXES:

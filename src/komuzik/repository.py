@@ -28,6 +28,7 @@ class UserSettings:
     user_id: int
     show_bot_caption: bool = True
     show_title: bool = True
+    default_quality: str = "720p"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class ChatSettings:
     allow_pinterest: bool = True
     show_bot_caption: bool = True
     show_title: bool = True
+    default_quality: str = "720p"
 
     def allows_platform(self, platform: str) -> bool:
         """Return whether auto-download is enabled for a parsed platform key."""
@@ -63,6 +65,14 @@ CHAT_SETTING_KEYS = {
     "show_bot_caption",
     "show_title",
 }
+
+ALLOWED_DEFAULT_QUALITIES = ("360p", "480p", "720p", "1080p")
+
+
+def _normalize_default_quality(value: str | None) -> str:
+    if value in ALLOWED_DEFAULT_QUALITIES:
+        return value
+    return "720p"
 
 
 class StatsRepository:
@@ -608,10 +618,10 @@ class StatsRepository:
     # === User settings ===
 
     def get_user_settings(self, user_id: int) -> UserSettings:
-        """Return caption settings for a user (defaults: both enabled)."""
+        """Return caption settings for a user (defaults: both enabled, 720p)."""
         try:
             row = self.db.fetchone(
-                """SELECT show_bot_caption, show_title
+                """SELECT show_bot_caption, show_title, default_quality
                    FROM user_settings WHERE user_id = ?""",
                 (user_id,),
             )
@@ -621,10 +631,41 @@ class StatsRepository:
                 user_id=user_id,
                 show_bot_caption=bool(row[0]),
                 show_title=bool(row[1]),
+                default_quality=_normalize_default_quality(row[2]),
             )
         except Exception as e:
             logger.error(f"Failed to get settings for {user_id}: {e}")
             return UserSettings(user_id=user_id)
+
+    def _save_user_settings(
+        self,
+        user_id: int,
+        *,
+        show_bot_caption: bool,
+        show_title: bool,
+        default_quality: str,
+    ) -> UserSettings:
+        quality = _normalize_default_quality(default_quality)
+        try:
+            self.db.execute(
+                """INSERT INTO user_settings
+                   (user_id, show_bot_caption, show_title, default_quality, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     show_bot_caption = excluded.show_bot_caption,
+                     show_title = excluded.show_title,
+                     default_quality = excluded.default_quality,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (user_id, int(show_bot_caption), int(show_title), quality),
+            )
+        except Exception as e:
+            logger.error(f"Failed to save settings for {user_id}: {e}")
+        return UserSettings(
+            user_id=user_id,
+            show_bot_caption=show_bot_caption,
+            show_title=show_title,
+            default_quality=quality,
+        )
 
     def set_user_setting(self, user_id: int, key: str, value: bool) -> UserSettings:
         """Upsert a single user setting key ('show_bot_caption' or 'show_title')."""
@@ -634,24 +675,21 @@ class StatsRepository:
         current = self.get_user_settings(user_id)
         show_bot = value if key == "show_bot_caption" else current.show_bot_caption
         show_title = value if key == "show_title" else current.show_title
-
-        try:
-            self.db.execute(
-                """INSERT INTO user_settings (user_id, show_bot_caption, show_title, updated_at)
-                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(user_id) DO UPDATE SET
-                     show_bot_caption = excluded.show_bot_caption,
-                     show_title = excluded.show_title,
-                     updated_at = CURRENT_TIMESTAMP""",
-                (user_id, int(show_bot), int(show_title)),
-            )
-        except Exception as e:
-            logger.error(f"Failed to save settings for {user_id}: {e}")
-
-        return UserSettings(
-            user_id=user_id,
+        return self._save_user_settings(
+            user_id,
             show_bot_caption=show_bot,
             show_title=show_title,
+            default_quality=current.default_quality,
+        )
+
+    def set_user_default_quality(self, user_id: int, quality: str) -> UserSettings:
+        """Set personal default YouTube quality for inline."""
+        current = self.get_user_settings(user_id)
+        return self._save_user_settings(
+            user_id,
+            show_bot_caption=current.show_bot_caption,
+            show_title=current.show_title,
+            default_quality=quality,
         )
 
     def toggle_user_setting(self, user_id: int, key: str) -> UserSettings:
@@ -666,11 +704,11 @@ class StatsRepository:
     # === Chat settings (groups) ===
 
     def get_chat_settings(self, chat_id: int) -> ChatSettings:
-        """Return group settings (defaults: all enabled)."""
+        """Return group settings (defaults: all enabled, 720p)."""
         try:
             row = self.db.fetchone(
                 """SELECT allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
-                          show_bot_caption, show_title
+                          show_bot_caption, show_title, default_quality
                    FROM chat_settings WHERE chat_id = ?""",
                 (chat_id,),
             )
@@ -684,10 +722,53 @@ class StatsRepository:
                 allow_pinterest=bool(row[3]),
                 show_bot_caption=bool(row[4]),
                 show_title=bool(row[5]),
+                default_quality=_normalize_default_quality(row[6]),
             )
         except Exception as e:
             logger.error(f"Failed to get chat settings for {chat_id}: {e}")
             return ChatSettings(chat_id=chat_id)
+
+    def _save_chat_settings(self, chat_id: int, settings: ChatSettings) -> ChatSettings:
+        quality = _normalize_default_quality(settings.default_quality)
+        saved = ChatSettings(
+            chat_id=chat_id,
+            allow_youtube=settings.allow_youtube,
+            allow_tiktok=settings.allow_tiktok,
+            allow_twitter=settings.allow_twitter,
+            allow_pinterest=settings.allow_pinterest,
+            show_bot_caption=settings.show_bot_caption,
+            show_title=settings.show_title,
+            default_quality=quality,
+        )
+        try:
+            self.db.execute(
+                """INSERT INTO chat_settings (
+                       chat_id, allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
+                       show_bot_caption, show_title, default_quality, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(chat_id) DO UPDATE SET
+                     allow_youtube = excluded.allow_youtube,
+                     allow_tiktok = excluded.allow_tiktok,
+                     allow_twitter = excluded.allow_twitter,
+                     allow_pinterest = excluded.allow_pinterest,
+                     show_bot_caption = excluded.show_bot_caption,
+                     show_title = excluded.show_title,
+                     default_quality = excluded.default_quality,
+                     updated_at = CURRENT_TIMESTAMP""",
+                (
+                    chat_id,
+                    int(saved.allow_youtube),
+                    int(saved.allow_tiktok),
+                    int(saved.allow_twitter),
+                    int(saved.allow_pinterest),
+                    int(saved.show_bot_caption),
+                    int(saved.show_title),
+                    saved.default_quality,
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Failed to save chat settings for {chat_id}: {e}")
+        return saved
 
     def set_chat_setting(self, chat_id: int, key: str, value: bool) -> ChatSettings:
         """Upsert a single chat setting key."""
@@ -702,37 +783,27 @@ class StatsRepository:
             "allow_pinterest": current.allow_pinterest,
             "show_bot_caption": current.show_bot_caption,
             "show_title": current.show_title,
+            "default_quality": current.default_quality,
         }
         updated[key] = value
+        return self._save_chat_settings(chat_id, ChatSettings(chat_id=chat_id, **updated))
 
-        try:
-            self.db.execute(
-                """INSERT INTO chat_settings (
-                       chat_id, allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
-                       show_bot_caption, show_title, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(chat_id) DO UPDATE SET
-                     allow_youtube = excluded.allow_youtube,
-                     allow_tiktok = excluded.allow_tiktok,
-                     allow_twitter = excluded.allow_twitter,
-                     allow_pinterest = excluded.allow_pinterest,
-                     show_bot_caption = excluded.show_bot_caption,
-                     show_title = excluded.show_title,
-                     updated_at = CURRENT_TIMESTAMP""",
-                (
-                    chat_id,
-                    int(updated["allow_youtube"]),
-                    int(updated["allow_tiktok"]),
-                    int(updated["allow_twitter"]),
-                    int(updated["allow_pinterest"]),
-                    int(updated["show_bot_caption"]),
-                    int(updated["show_title"]),
-                ),
-            )
-        except Exception as e:
-            logger.error(f"Failed to save chat settings for {chat_id}: {e}")
-
-        return ChatSettings(chat_id=chat_id, **updated)
+    def set_chat_default_quality(self, chat_id: int, quality: str) -> ChatSettings:
+        """Set group default YouTube quality for auto-download."""
+        current = self.get_chat_settings(chat_id)
+        return self._save_chat_settings(
+            chat_id,
+            ChatSettings(
+                chat_id=chat_id,
+                allow_youtube=current.allow_youtube,
+                allow_tiktok=current.allow_tiktok,
+                allow_twitter=current.allow_twitter,
+                allow_pinterest=current.allow_pinterest,
+                show_bot_caption=current.show_bot_caption,
+                show_title=current.show_title,
+                default_quality=quality,
+            ),
+        )
 
     def toggle_chat_setting(self, chat_id: int, key: str) -> ChatSettings:
         """Toggle a boolean chat setting and return the updated settings."""
