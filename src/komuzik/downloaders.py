@@ -23,6 +23,9 @@ from .config import (
     DEFAULT_VIDEO_HEIGHT,
     DEFAULT_VIDEO_WIDTH,
     MAX_DOWNLOAD_SIZE_BYTES,
+    PINTEREST_ERROR_MESSAGE,
+    PINTEREST_MAX_RETRIES,
+    PINTEREST_RETRY_BACKOFF,
     TIKTOK_ERROR_MESSAGE,
     TIKTOK_MAX_RETRIES,
     TIKTOK_RETRY_BACKOFF,
@@ -490,11 +493,11 @@ async def send_image_content(event: Message, file_path: str, bot_username: str =
     await event.respond(caption, file=file_path)
 
 
-async def _download_twitter_photos_with_gallery_dl(url: str, temp_dir: str) -> tuple[str, dict]:
-    """Download Twitter content (photos or videos) using gallery-dl.
+async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str, dict]:
+    """Download media content (photos or videos) using gallery-dl.
 
     Args:
-        url: Twitter/X URL
+        url: Content URL
         temp_dir: Directory to save files to
 
     Returns:
@@ -636,7 +639,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
     # First, try gallery-dl (works best for photos and also supports videos)
     try:
         logger.info(f"Trying gallery-dl first for Twitter content: {url}")
-        file_path, metadata = await _download_twitter_photos_with_gallery_dl(url, temp_dir)
+        file_path, metadata = await _download_media_with_gallery_dl(url, temp_dir)
         _ensure_file_within_limit(file_path, "Twitter content")
         logger.info(f"gallery-dl successfully downloaded: {file_path}")
         cleanup_on_error = False
@@ -737,3 +740,120 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
     if cleanup_on_error and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
     raise Exception(TWITTER_ERROR_MESSAGE)
+
+
+async def download_pinterest_content(url: str, max_retries: int | None = None) -> tuple[str, dict]:
+    """Download a Pinterest video or photo and return the path and metadata.
+
+    Strategy: Try gallery-dl first, then fall back to yt-dlp for video-oriented URLs.
+
+    Args:
+        url: Pinterest content URL
+        max_retries: Maximum number of retry attempts (uses config default if None)
+
+    Returns:
+        Tuple of (file_path, metadata) where metadata includes 'content_type' ('video' or 'photo')
+
+    Raises:
+        Exception: If download fails after all retries
+
+    """
+    retries = _safe_int(max_retries, _safe_int(PINTEREST_MAX_RETRIES, 3))
+    retries = max(1, retries)
+
+    temp_dir = tempfile.mkdtemp()
+    cleanup_on_error = True
+
+    try:
+        logger.info(f"Trying gallery-dl first for Pinterest content: {url}")
+        file_path, metadata = await _download_media_with_gallery_dl(url, temp_dir)
+        _ensure_file_within_limit(file_path, "Pinterest content")
+        logger.info(f"gallery-dl successfully downloaded: {file_path}")
+        cleanup_on_error = False
+        return file_path, metadata
+    except DownloadTooLargeError:
+        if cleanup_on_error and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        raise
+    except Exception as gallery_error:
+        logger.info(f"gallery-dl failed for Pinterest: {gallery_error}, trying yt-dlp")
+        for filename in os.listdir(temp_dir):
+            try:
+                os.remove(os.path.join(temp_dir, filename))
+            except Exception:
+                pass
+
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            loop = asyncio.get_running_loop()
+            ydl_opts = {
+                **YDLP_BASE_OPTS,
+                "format": "best",
+                "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
+            }
+
+            with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                info = cast(
+                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                )
+                _ensure_size_within_limit(_get_expected_size(info), "Pinterest content")
+                await loop.run_in_executor(None, ydl.download, [url])
+
+            try:
+                file_path = _find_downloaded_file(temp_dir, allow_images=False)
+                content_type = "video"
+            except Exception:
+                file_path = _find_downloaded_file(temp_dir, allow_images=True)
+                content_type = "photo"
+
+            _ensure_file_within_limit(file_path, "Pinterest content")
+
+            metadata = {
+                "duration": _safe_int(info.get("duration"), 0),
+                "width": info.get("width", 0),
+                "height": info.get("height", 0),
+                "content_type": content_type,
+            }
+
+            cleanup_on_error = False
+            return file_path, metadata
+
+        except DownloadTooLargeError:
+            if cleanup_on_error and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise
+        except DownloadError as e:
+            error_msg = str(e)
+            last_error = e
+
+            if attempt < retries - 1:
+                wait_time = PINTEREST_RETRY_BACKOFF**attempt
+                logger.warning(
+                    f"Pinterest extraction failed (attempt {attempt + 1}/{retries}). "
+                    f"Retrying in {wait_time}s... Error: {error_msg}"
+                )
+                await asyncio.sleep(wait_time)
+                continue
+            if cleanup_on_error and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise Exception(PINTEREST_ERROR_MESSAGE)
+
+        except Exception as e:
+            if isinstance(e, DownloadTooLargeError):
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise
+            last_error = e
+            logger.error(
+                f"Unexpected error downloading Pinterest (attempt {attempt + 1}/{retries}): {e}"
+            )
+            if attempt == retries - 1:
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise
+
+    if cleanup_on_error and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    raise Exception(PINTEREST_ERROR_MESSAGE)

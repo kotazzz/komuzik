@@ -11,10 +11,18 @@ from typing import Any, cast
 from telethon import Button, events
 from telethon.tl.custom import Message
 
-from .config import MSG_HELP, MSG_START, TIKTOK_REGEX, TWITTER_REGEX, YOUTUBE_REGEX
+from .config import (
+    MSG_HELP,
+    MSG_START,
+    PINTEREST_REGEX,
+    TIKTOK_REGEX,
+    TWITTER_REGEX,
+    YOUTUBE_REGEX,
+)
 from .download_limiter import DownloadLimiter
 from .downloaders import (
     download_tiktok_video,
+    download_pinterest_content,
     download_twitter_video,
     download_youtube_audio,
     download_youtube_video,
@@ -252,7 +260,7 @@ class BotHandlers:
             await searching_msg.edit("Выберите видео из результатов поиска:", buttons=buttons)
 
     async def message_handler(self, event: Message):
-        """Handle incoming messages with YouTube, TikTok and Twitter links."""
+        """Handle incoming messages with YouTube, TikTok, Twitter and Pinterest links."""
         message_obj = event.message
         user_id, username = self._get_user_info(event)
 
@@ -308,6 +316,12 @@ class BotHandlers:
             await self._handle_twitter(event, twitter_match.group(0))
             return
 
+        # Check for Pinterest
+        pinterest_match = PINTEREST_REGEX.search(text)
+        if pinterest_match:
+            await self._handle_pinterest(event, pinterest_match.group(0))
+            return
+
         # Check for TikTok
         tiktok_match = TIKTOK_REGEX.search(text)
         if tiktok_match:
@@ -318,7 +332,7 @@ class BotHandlers:
         youtube_match = YOUTUBE_REGEX.search(text)
         if not youtube_match:
             await event.respond(
-                "Пожалуйста, отправьте корректную ссылку на видео YouTube, YouTube Shorts, TikTok или Twitter/X."
+                "Пожалуйста, отправьте корректную ссылку на видео YouTube, YouTube Shorts, TikTok, Twitter/X или Pinterest."
             )
             return
 
@@ -616,6 +630,7 @@ class BotHandlers:
             message += f"🎬 Видео (YouTube): {stats['total_videos']}\n"
             message += f"🎵 Аудио: {stats['total_audio']}\n"
             message += f"📱 TikTok: {stats['total_tiktoks']}\n\n"
+            message += f"📌 Pinterest: {stats['total_pinterest']}\n\n"
 
             # Popular video formats
             if stats["popular_video_formats"]:
@@ -687,6 +702,52 @@ class BotHandlers:
                         user_id, username, success=False, error_message=str(e)
                     )
                     await event.respond(f"Произошла ошибка при обработке контента: {e!s}")
+        finally:
+            if file_path:
+                self._cleanup_download_file(file_path)
+            await self.download_limiter.finish_download(user_id, download_id)
+
+    async def _handle_pinterest(self, event: Message, url: str):
+        """Handle Pinterest video and photo download."""
+        user_id, username = self._get_user_info(event)
+        download_id = str(uuid.uuid4())
+
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
+
+        file_path = None
+        try:
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, "document"):
+                try:
+                    processing_msg = await event.respond(
+                        "Загрузка с Pinterest... Пожалуйста, подождите."
+                    )
+                    logger.info(f"Downloading Pinterest content: {url}")
+
+                    file_path, metadata = await download_pinterest_content(url)
+                    logger.info(f"Pinterest content downloaded successfully: {file_path}")
+
+                    if metadata.get("content_type") == "photo":
+                        await send_image_content(event, file_path, self.bot_username)
+                    else:
+                        await send_video_content(event, file_path, metadata, self.bot_username)
+
+                    if processing_msg is not None:
+                        await processing_msg.delete()
+
+                    self.stats.track_pinterest_download(user_id, username, success=True)
+
+                except Exception as e:
+                    logger.error(f"Error sending Pinterest content: {e}")
+                    self.stats.track_pinterest_download(
+                        user_id, username, success=False, error_message=str(e)
+                    )
+                    await event.respond(f"Произошла ошибка при обработке Pinterest: {e!s}")
         finally:
             if file_path:
                 self._cleanup_download_file(file_path)

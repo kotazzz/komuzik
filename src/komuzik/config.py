@@ -25,6 +25,9 @@ YOUTUBE_REGEX = re.compile(
 )
 TIKTOK_REGEX = re.compile(r"(https?://)?(www\.|vm\.|vt\.)?(tiktok\.com)/(\S+)")
 TWITTER_REGEX = re.compile(r"(https?://)?(www\.|mobile\.)?(twitter\.com|x\.com)/(\S+)")
+PINTEREST_REGEX = re.compile(
+    r"(https?://)?(www\.|[a-z]{2}\.)?(pinterest\.com/pin/|pinterest\.co\.uk/pin/|pin\.it/)(\S+)"
+)
 
 # ============= Video Settings =============
 VIDEO_SETTINGS = _config.get_section("video")
@@ -93,12 +96,22 @@ TWITTER_ERROR_MESSAGE = TWITTER_SETTINGS.get(
     "Не удается загрузить видео с Twitter/X. Пожалуйста, проверьте ссылку и попробуйте позже.",
 )
 
+# ============= Pinterest Settings =============
+PINTEREST_SETTINGS = _config.get_section("pinterest")
+
+PINTEREST_MAX_RETRIES = PINTEREST_SETTINGS.get("max_retries", 3)
+PINTEREST_RETRY_BACKOFF = PINTEREST_SETTINGS.get("retry_backoff_base", 2)
+PINTEREST_ERROR_MESSAGE = PINTEREST_SETTINGS.get(
+    "error_message",
+    "Не удается загрузить медиа с Pinterest. Пожалуйста, проверьте ссылку и попробуйте позже.",
+)
+
 # ============= Bot Messages =============
 MESSAGES = _config.get_section("messages")
 
 MSG_START = MESSAGES.get(
     "start",
-    "👋 Привет! Я бот для скачивания видео и музыки с YouTube и TikTok.\n\n"
+    "👋 Привет! Я бот для скачивания видео и музыки с YouTube, TikTok, Twitter/X и Pinterest.\n\n"
     "📺 **YouTube**: выбирайте качество видео и аудио\n"
     "🎵 **TikTok**: автоматическая загрузка видео\n\n"
     "Просто отправьте мне ссылку на видео!",
@@ -107,7 +120,7 @@ MSG_START = MESSAGES.get(
 MSG_HELP = MESSAGES.get(
     "help",
     "🔍 **Как пользоваться ботом:**\n\n"
-    "1. Отправьте ссылку на видео с YouTube, YouTube Shorts, TikTok или Twitter/X\n"
+    "1. Отправьте ссылку на видео с YouTube, YouTube Shorts, TikTok, Twitter/X или Pinterest\n"
     "2. /search <запрос> - поиск видео на YouTube\n"
     "3. /report - отправить报告 о проблеме\n"
     "4. /stats - статистика бота\n\n"
@@ -115,5 +128,6 @@ MSG_HELP = MESSAGES.get(
     "• YouTube (видео и аудио, выбор качества)\n"
     "• YouTube Shorts (видео)\n"
     "• TikTok (видео)\n"
-    "• Twitter/X (видео, фото, альбомы)",
+    "• Twitter/X (видео, фото, альбомы)\n"
+    "• Pinterest (видео и фото)",
 )

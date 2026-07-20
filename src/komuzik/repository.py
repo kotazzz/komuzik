@@ -143,6 +143,31 @@ class StatsRepository:
             error_message=error_message,
         )
 
+    def track_pinterest_download(
+        self,
+        user_id: int,
+        username: str | None = None,
+        success: bool = True,
+        error_message: str | None = None,
+    ):
+        """Track a Pinterest download event.
+
+        Args:
+            user_id: Telegram user ID
+            username: Telegram username
+            success: Whether download was successful
+            error_message: Error message if download failed
+
+        """
+        self._track_event(
+            "pinterest_download",
+            user_id,
+            username,
+            platform="pinterest",
+            success=success,
+            error_message=error_message,
+        )
+
     def track_error(
         self, user_id: int, error_type: str, error_message: str, username: str | None = None
     ):
@@ -213,6 +238,7 @@ class StatsRepository:
             "total_videos": self._get_event_count("video_download", date_filter),
             "total_audio": self._get_event_count("audio_download", date_filter),
             "total_tiktoks": self._get_event_count("tiktok_download", date_filter),
+            "total_pinterest": self._get_event_count("pinterest_download", date_filter),
             "total_downloads": self._get_total_downloads(date_filter),
             "successful_downloads": self._get_successful_downloads(date_filter),
             "failed_downloads": self._get_failed_downloads(date_filter),
@@ -275,7 +301,7 @@ class StatsRepository:
         return result[0] if result else 0
 
     def _get_total_downloads(self, date_filter: str) -> int:
-        """Get total number of downloads (video + audio + tiktok).
+        """Get total number of downloads (video + audio + tiktok + pinterest).
 
         Args:
             date_filter: SQL date filter clause
@@ -285,7 +311,7 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download')
+                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
                     {date_filter}"""
         result = self.db.fetchone(query)
         return result[0] if result else 0
@@ -301,7 +327,7 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download')
+                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
                     AND success = 1
                     {date_filter}"""
         result = self.db.fetchone(query)
@@ -318,7 +344,7 @@ class StatsRepository:
 
         """
         query = f"""SELECT COUNT(*) FROM statistics 
-                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download')
+                    WHERE event_type IN ('video_download', 'audio_download', 'tiktok_download', 'pinterest_download')
                     AND success = 0
                     {date_filter}"""
         result = self.db.fetchone(query)
