@@ -4,12 +4,23 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required for yt-dlp, ffmpeg, and Telethon
+# Install system dependencies required for yt-dlp, ffmpeg, Telethon, and stats fonts
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     wget \
+    unzip \
     ca-certificates \
+    fontconfig \
     fonts-dejavu-core \
+    && mkdir -p /usr/local/share/fonts/nerd \
+    && wget -qO /tmp/JetBrainsMono.zip \
+      https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip \
+    && unzip -j /tmp/JetBrainsMono.zip \
+      "JetBrainsMonoNerdFont-Regular.ttf" \
+      "JetBrainsMonoNerdFont-Bold.ttf" \
+      -d /usr/local/share/fonts/nerd \
+    && fc-cache -f \
+    && rm -f /tmp/JetBrainsMono.zip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster dependency management

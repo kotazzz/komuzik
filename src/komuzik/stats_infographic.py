@@ -13,32 +13,48 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 300
+CACHE_VERSION = "v2"
 CACHE_DIR = Path("data/stats_cache")
-WIDTH = 1080
-PADDING = 48
 
-# Distinct palette (not purple-on-white AI default)
+# Landscape canvas
+WIDTH = 1600
+HEIGHT = 980
+PADDING = 40
+GAP = 20
+COL_GAP = 28
+
 BG = (18, 22, 28)
 CARD = (28, 34, 44)
 CARD_BORDER = (45, 54, 68)
 TEXT = (236, 240, 245)
 MUTED = (148, 163, 184)
-ACCENT = (45, 212, 191)  # teal
-ACCENT_2 = (251, 146, 60)  # amber
-ACCENT_3 = (248, 113, 113)  # coral
-ACCENT_4 = (96, 165, 250)  # blue
-ACCENT_5 = (232, 121, 249)  # soft magenta for variety in bars
-SUCCESS = (52, 211, 153)
-FAIL = (248, 113, 113)
+TEAL = (45, 212, 191)
+AMBER = (251, 146, 60)
+CORAL = (248, 113, 113)
+BLUE = (96, 165, 250)
+PINK = (232, 121, 249)
+GREEN = (52, 211, 153)
+TRACK = (38, 45, 58)
 
-PLATFORM_COLORS = {
-    "youtube": ACCENT_4,
-    "audio": ACCENT_2,
-    "tiktok": ACCENT,
-    "pinterest": ACCENT_5,
-}
+# Nerd Font / Font Awesome codepoints (work in JetBrainsMono Nerd Font)
+ICON_USERS = "\uf0c0"
+ICON_SEARCH = "\uf002"
+ICON_DOWNLOAD = "\uf019"
+ICON_CHECK = "\uf00c"
+ICON_TIMES = "\uf00d"
+ICON_YOUTUBE = "\uf167"
+ICON_MUSIC = "\uf001"
+ICON_BOLT = "\uf0e7"
+ICON_PIN = "\uf08d"
+ICON_COMMENT = "\uf075"
+ICON_FILM = "\uf008"
+ICON_HEADPHONES = "\uf025"
+ICON_CHART = "\uf080"
+
+FORMAT_COLORS = [BLUE, TEAL, AMBER, PINK, CORAL, (129, 140, 248), (251, 113, 133)]
 
 _locks: dict[str, asyncio.Lock] = {}
+_font_cache: dict[tuple[int, bool], Any] = {}
 
 
 def _lock_for(key: str) -> asyncio.Lock:
@@ -48,21 +64,41 @@ def _lock_for(key: str) -> asyncio.Lock:
 
 
 def _font(size: int, bold: bool = False) -> Any:
+    key = (size, bold)
+    if key in _font_cache:
+        return _font_cache[key]
+
+    root = Path(__file__).resolve().parents[2]
     candidates = [
+        "/usr/local/share/fonts/nerd/JetBrainsMonoNerdFont-Bold.ttf" if bold else None,
+        "/usr/local/share/fonts/nerd/JetBrainsMonoNerdFont-Regular.ttf",
+        "/usr/share/fonts/truetype/nerd/JetBrainsMonoNerdFont-Bold.ttf" if bold else None,
+        "/usr/share/fonts/truetype/nerd/JetBrainsMonoNerdFont-Regular.ttf",
+        str(root / ".fonts/JetBrainsMonoNerdFont-Bold.ttf") if bold else None,
+        str(root / ".fonts/JetBrainsMonoNerdFont-Regular.ttf"),
+        str(Path.home() / "Library/Fonts/JetBrainsMonoNerdFont-Bold.ttf") if bold else None,
+        str(Path.home() / "Library/Fonts/JetBrainsMonoNerdFont-Regular.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else None,
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
     ]
+    font: Any = ImageFont.load_default()
     for path in candidates:
         if not path:
             continue
         try:
-            return ImageFont.truetype(path, size=size)
+            font = ImageFont.truetype(path, size=size)
+            break
         except OSError:
             continue
-    return ImageFont.load_default()
+    _font_cache[key] = font
+    return font
+
+
+def _tint(color: tuple[int, int, int], strength: float = 0.22) -> tuple[int, int, int]:
+    """Dark tinted background from accent color."""
+    return tuple(int(c * strength + b * (1 - strength)) for c, b in zip(color, BG, strict=True))
 
 
 def _rounded_rect(
@@ -72,7 +108,7 @@ def _rounded_rect(
     fill: tuple[int, int, int],
     outline: tuple[int, int, int] | None = None,
 ) -> None:
-    draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=2)
+    draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=1)
 
 
 def _text_size(draw: ImageDraw.ImageDraw, text: str, font: Any) -> tuple[int, int]:
@@ -80,47 +116,89 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font: Any) -> tuple[int, in
     return int(box[2] - box[0]), int(box[3] - box[1])
 
 
-def _draw_kpi(
+def _fmt_int(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def _draw_kpi_card(
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
     w: int,
     h: int,
+    icon: str,
     label: str,
     value: str,
     color: tuple[int, int, int],
 ) -> None:
-    _rounded_rect(draw, (x, y, x + w, y + h), 18, CARD, CARD_BORDER)
-    draw.rectangle((x, y, x + 8, y + h), fill=color)
-    font_label = _font(22)
-    font_value = _font(36, bold=True)
-    draw.text((x + 24, y + 18), label, font=font_label, fill=MUTED)
-    draw.text((x + 24, y + 52), value, font=font_value, fill=TEXT)
+    _rounded_rect(draw, (x, y, x + w, y + h), 18, _tint(color, 0.28), _tint(color, 0.45))
+    icon_font = _font(28)
+    label_font = _font(20)
+    value_font = _font(34, bold=True)
+    draw.text((x + 22, y + 18), icon, font=icon_font, fill=color)
+    draw.text((x + 58, y + 22), label, font=label_font, fill=MUTED)
+    draw.text((x + 22, y + 58), value, font=value_font, fill=TEXT)
 
 
-def _draw_hbar(
+def _draw_segmented_bar(
+    img: Image.Image,
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
     w: int,
+    h: int,
+    parts: list[tuple[str, int, tuple[int, int, int]]],
+) -> None:
+    """Thick rounded progress bar with colored segments (like success/fail)."""
+    _rounded_rect(draw, (x, y, x + w, y + h), h // 2, TRACK)
+    total = sum(v for _, v, _ in parts) or 1
+    if total <= 0 or not any(v > 0 for _, v, _ in parts):
+        return
+
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(layer)
+    cursor = 0
+    positive = [(name, value, color) for name, value, color in parts if value > 0]
+    for i, (_, value, color) in enumerate(positive):
+        seg_w = int(round(w * value / total))
+        if i == len(positive) - 1:
+            seg_w = w - cursor
+        seg_w = max(seg_w, 1)
+        layer_draw.rectangle((cursor, 0, cursor + seg_w, h), fill=(*color, 255))
+        cursor += seg_w
+
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, fill=255)
+    layer.putalpha(mask)
+    img.paste(layer, (x, y), layer)
+
+
+def _draw_hbar_compact(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    w: int,
+    icon: str,
     label: str,
     value: int,
     max_value: int,
     color: tuple[int, int, int],
 ) -> int:
-    font = _font(24)
-    draw.text((x, y), f"{label}", font=font, fill=TEXT)
-    count_text = str(value)
-    tw, _ = _text_size(draw, count_text, font)
-    draw.text((x + w - tw, y), count_text, font=font, fill=MUTED)
-    bar_y = y + 34
-    bar_h = 18
-    _rounded_rect(draw, (x, bar_y, x + w, bar_y + bar_h), 9, (38, 45, 58))
+    font = _font(22)
+    icon_font = _font(20)
+    draw.text((x, y + 2), icon, font=icon_font, fill=color)
+    draw.text((x + 28, y), label, font=font, fill=TEXT)
+    count = _fmt_int(value)
+    tw, _ = _text_size(draw, count, font)
+    draw.text((x + w - tw, y), count, font=font, fill=MUTED)
+    bar_y = y + 30
+    bar_h = 16
+    _rounded_rect(draw, (x, bar_y, x + w, bar_y + bar_h), 8, TRACK)
     fill_w = int(w * (value / max_value)) if max_value > 0 else 0
-    fill_w = max(fill_w, 8 if value > 0 else 0)
+    fill_w = max(fill_w, 6 if value > 0 else 0)
     if fill_w:
-        _rounded_rect(draw, (x, bar_y, x + fill_w, bar_y + bar_h), 9, color)
-    return bar_y + bar_h + 28
+        _rounded_rect(draw, (x, bar_y, x + fill_w, bar_y + bar_h), 8, color)
+    return bar_y + bar_h + 18
 
 
 def _draw_donut(
@@ -129,6 +207,7 @@ def _draw_donut(
     cy: int,
     radius: int,
     parts: list[tuple[str, int, tuple[int, int, int]]],
+    hole_fill: tuple[int, int, int],
 ) -> None:
     total = sum(v for _, v, _ in parts) or 1
     start = -90.0
@@ -136,186 +215,264 @@ def _draw_donut(
     for _, value, color in parts:
         extent = 360.0 * value / total
         if value > 0:
-            draw.pieslice(bbox, start=start, end=start + extent, fill=color)
+            draw.pieslice(bbox, start=start, end=start + max(extent, 0.5), fill=color)
         start += extent
-    inner = radius - 28
-    draw.ellipse((cx - inner, cy - inner, cx + inner, cy + inner), fill=CARD)
-
-
-def _fmt_int(n: int) -> str:
-    return f"{n:,}".replace(",", " ")
+    inner = radius - 26
+    draw.ellipse((cx - inner, cy - inner, cx + inner, cy + inner), fill=hole_fill)
 
 
 def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
-    """Render stats dict into a PNG file and return its path."""
+    """Render landscape 2-column stats PNG."""
     period_names = {"day": "за день", "month": "за месяц", "all": "за всё время"}
     period_label = period_names.get(period, period)
 
-    # Tall canvas; crop to content at the end.
-    height = 2400
-    img = Image.new("RGB", (WIDTH, height), BG)
+    img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(img)
 
-    y = PADDING
-    title_font = _font(48, bold=True)
-    subtitle_font = _font(28)
-    section_font = _font(30, bold=True)
-
-    draw.text((PADDING, y), "KOMUZIK", font=title_font, fill=ACCENT)
-    y += 58
-    draw.text((PADDING, y), f"Статистика {period_label}", font=subtitle_font, fill=MUTED)
-    y += 56
-
-    # KPI row
     total = int(stats.get("total_downloads") or 0)
     ok = int(stats.get("successful_downloads") or 0)
     fail = int(stats.get("failed_downloads") or 0)
     success_pct = round(100 * ok / total) if total else 0
 
-    gap = 20
-    card_w = (WIDTH - 2 * PADDING - 3 * gap) // 4
-    card_h = 110
-    kpis = [
-        ("Пользователи", _fmt_int(int(stats.get("total_users") or 0)), ACCENT),
-        ("Поиски", _fmt_int(int(stats.get("total_searches") or 0)), ACCENT_4),
-        ("Загрузки", _fmt_int(total), ACCENT_2),
-        ("Успех", f"{success_pct}%", SUCCESS),
-    ]
-    for i, (label, value, color) in enumerate(kpis):
-        x = PADDING + i * (card_w + gap)
-        _draw_kpi(draw, x, y, card_w, card_h, label, value, color)
-    y += card_h + 36
-
-    # Success / fail bar
-    _rounded_rect(draw, (PADDING, y, WIDTH - PADDING, y + 120), 20, CARD, CARD_BORDER)
-    draw.text((PADDING + 28, y + 18), "Результат загрузок", font=section_font, fill=TEXT)
-    bar_x, bar_y, bar_w, bar_h = PADDING + 28, y + 62, WIDTH - 2 * PADDING - 56, 28
-    _rounded_rect(draw, (bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), 14, (38, 45, 58))
-    ok_w = int(bar_w * ok / total) if total else 0
-    if ok_w:
-        _rounded_rect(draw, (bar_x, bar_y, bar_x + ok_w, bar_y + bar_h), 14, SUCCESS)
-    if total and fail:
-        fail_w = bar_w - ok_w
-        if fail_w > 0:
-            _rounded_rect(draw, (bar_x + ok_w, bar_y, bar_x + bar_w, bar_y + bar_h), 14, FAIL)
-    small = _font(22)
-    draw.text(
-        (PADDING + 28, y + 96),
-        f"✅ {_fmt_int(ok)}   ❌ {_fmt_int(fail)}",
-        font=small,
-        fill=MUTED,
-    )
-    y += 148
-
-    # Platforms
-    _rounded_rect(draw, (PADDING, y, WIDTH - PADDING, y + 320), 20, CARD, CARD_BORDER)
-    draw.text((PADDING + 28, y + 20), "Платформы", font=section_font, fill=TEXT)
-    plat_y = y + 70
-    platforms = [
-        ("YouTube видео", int(stats.get("total_videos") or 0), PLATFORM_COLORS["youtube"]),
-        ("Аудио", int(stats.get("total_audio") or 0), PLATFORM_COLORS["audio"]),
-        ("TikTok", int(stats.get("total_tiktoks") or 0), PLATFORM_COLORS["tiktok"]),
-        ("Pinterest", int(stats.get("total_pinterest") or 0), PLATFORM_COLORS["pinterest"]),
-    ]
-    max_plat = max((v for _, v, _ in platforms), default=1) or 1
-    inner_w = WIDTH - 2 * PADDING - 56
-    for label, value, color in platforms:
-        plat_y = _draw_hbar(draw, PADDING + 28, plat_y, inner_w, label, value, max_plat, color)
-    y += 348
-
-    # Source + content donuts
     by_source = stats.get("by_source") or {}
     by_content = stats.get("by_content") or {}
     dm = int(by_source.get("dm") or 0)
     inline = int(by_source.get("inline") or 0)
-    video = int(by_content.get("video") or 0)
-    audio = int(by_content.get("audio") or 0)
+    video_n = int(by_content.get("video") or 0)
+    audio_n = int(by_content.get("audio") or 0)
+    src_total = max(dm + inline, 1)
+    cont_total = max(video_n + audio_n, 1)
 
-    _rounded_rect(draw, (PADDING, y, WIDTH - PADDING, y + 360), 20, CARD, CARD_BORDER)
-    draw.text((PADDING + 28, y + 20), "Источник и тип", font=section_font, fill=TEXT)
+    video_formats = list(stats.get("popular_video_formats") or [])[:5]
+    audio_formats = list(stats.get("popular_audio_formats") or [])[:5]
 
-    left_cx, right_cx = PADDING + 250, WIDTH - PADDING - 250
-    cy = y + 170
+    # Header
+    y = PADDING
+    draw.text((PADDING, y), f"{ICON_CHART}  KOMUZIK", font=_font(42, bold=True), fill=TEAL)
+    draw.text(
+        (PADDING + 320, y + 12),
+        f"Статистика {period_label}",
+        font=_font(26),
+        fill=MUTED,
+    )
+    y += 64
+
+    # KPI row
+    card_w = (WIDTH - 2 * PADDING - 3 * GAP) // 4
+    card_h = 100
+    kpis = [
+        (ICON_USERS, "Пользователи", _fmt_int(int(stats.get("total_users") or 0)), TEAL),
+        (ICON_SEARCH, "Поиски", _fmt_int(int(stats.get("total_searches") or 0)), BLUE),
+        (ICON_DOWNLOAD, "Загрузки", _fmt_int(total), AMBER),
+        (ICON_CHECK, "Успех", f"{success_pct}%", GREEN),
+    ]
+    for i, (icon, label, value, color) in enumerate(kpis):
+        x = PADDING + i * (card_w + GAP)
+        _draw_kpi_card(draw, x, y, card_w, card_h, icon, label, value, color)
+    y += card_h + 24
+
+    # Two columns
+    col_w = (WIDTH - 2 * PADDING - COL_GAP) // 2
+    left_x = PADDING
+    right_x = PADDING + col_w + COL_GAP
+    col_top = y
+
+    # --- LEFT: result + platforms ---
+    result_h = 190
+    _rounded_rect(
+        draw, (left_x, col_top, left_x + col_w, col_top + result_h), 20, CARD, CARD_BORDER
+    )
+    draw.text(
+        (left_x + 24, col_top + 20),
+        f"{ICON_DOWNLOAD}  Результат загрузок",
+        font=_font(26, bold=True),
+        fill=TEXT,
+    )
+    bar_x = left_x + 24
+    bar_y = col_top + 68
+    bar_w = col_w - 48
+    bar_h = 40
+    parts_result = [
+        ("ok", ok, GREEN),
+        ("fail", fail, CORAL),
+    ]
+    _draw_segmented_bar(img, draw, bar_x, bar_y, bar_w, bar_h, parts_result)
+    legend_font = _font(22)
+    draw.text(
+        (bar_x, bar_y + bar_h + 22),
+        f"{ICON_CHECK}  {_fmt_int(ok)}",
+        font=legend_font,
+        fill=GREEN,
+    )
+    draw.text(
+        (bar_x + 200, bar_y + bar_h + 22),
+        f"{ICON_TIMES}  {_fmt_int(fail)}",
+        font=legend_font,
+        fill=CORAL,
+    )
+
+    plat_top = col_top + result_h + 20
+    plat_h = HEIGHT - PADDING - plat_top
+    _rounded_rect(
+        draw, (left_x, plat_top, left_x + col_w, plat_top + plat_h), 20, CARD, CARD_BORDER
+    )
+    draw.text(
+        (left_x + 24, plat_top + 18),
+        f"{ICON_BOLT}  Платформы",
+        font=_font(26, bold=True),
+        fill=TEXT,
+    )
+    platforms = [
+        (ICON_YOUTUBE, "YouTube видео", int(stats.get("total_videos") or 0), BLUE),
+        (ICON_MUSIC, "Аудио", int(stats.get("total_audio") or 0), AMBER),
+        (ICON_BOLT, "TikTok", int(stats.get("total_tiktoks") or 0), TEAL),
+        (ICON_PIN, "Pinterest", int(stats.get("total_pinterest") or 0), PINK),
+    ]
+    max_plat = max((v for _, _, v, _ in platforms), default=1) or 1
+    py = plat_top + 64
+    inner_w = col_w - 48
+    for icon, label, value, color in platforms:
+        py = _draw_hbar_compact(
+            draw, left_x + 24, py, inner_w, icon, label, value, max_plat, color
+        )
+
+    # --- RIGHT: donuts + formats ---
+    donut_h = 300
+    _rounded_rect(
+        draw, (right_x, col_top, right_x + col_w, col_top + donut_h), 20, CARD, CARD_BORDER
+    )
+    draw.text(
+        (right_x + 24, col_top + 18),
+        f"{ICON_CHART}  Источник и тип",
+        font=_font(26, bold=True),
+        fill=TEXT,
+    )
+    left_cx = right_x + col_w // 4
+    right_cx = right_x + 3 * col_w // 4
+    cy = col_top + 145
     _draw_donut(
         draw,
         left_cx,
         cy,
-        110,
-        [("ЛС", dm, ACCENT_4), ("Inline", inline, ACCENT)],
+        88,
+        [("ЛС", dm, BLUE), ("Inline", inline, TEAL)],
+        CARD,
     )
     _draw_donut(
         draw,
         right_cx,
         cy,
-        110,
-        [("Видео", video, ACCENT_2), ("Аудио", audio, ACCENT_5)],
+        88,
+        [("Видео", video_n, AMBER), ("Аудио", audio_n, PINK)],
+        CARD,
     )
-
-    legend = _font(24)
-    src_total = max(dm + inline, 1)
-    cont_total = max(video + audio, 1)
+    # center icons
     draw.text(
-        (left_cx - 120, y + 300),
-        f"ЛС {round(100 * dm / src_total)}% · Inline {round(100 * inline / src_total)}%",
-        font=legend,
+        (left_cx - 12, cy - 14),
+        ICON_COMMENT,
+        font=_font(24),
+        fill=BLUE,
+    )
+    draw.text(
+        (right_cx - 12, cy - 14),
+        ICON_FILM,
+        font=_font(24),
+        fill=AMBER,
+    )
+    small = _font(20)
+    draw.text(
+        (left_cx - 110, col_top + 250),
+        f"ЛС {round(100 * dm / src_total)}%  ·  Inline {round(100 * inline / src_total)}%",
+        font=small,
         fill=MUTED,
     )
     draw.text(
-        (right_cx - 130, y + 300),
-        f"Видео {round(100 * video / cont_total)}% · Аудио {round(100 * audio / cont_total)}%",
-        font=legend,
+        (right_cx - 120, col_top + 250),
+        f"Видео {round(100 * video_n / cont_total)}%  ·  "
+        f"Аудио {round(100 * audio_n / cont_total)}%",
+        font=small,
         fill=MUTED,
     )
-    y += 388
 
-    # Popular formats
-    video_formats = list(stats.get("popular_video_formats") or [])[:5]
-    audio_formats = list(stats.get("popular_audio_formats") or [])[:5]
-    formats_h = 100 + max(len(video_formats), 1) * 80 + 50 + max(len(audio_formats), 1) * 80 + 40
-    _rounded_rect(draw, (PADDING, y, WIDTH - PADDING, y + formats_h), 20, CARD, CARD_BORDER)
-    draw.text((PADDING + 28, y + 20), "Популярные форматы", font=section_font, fill=TEXT)
-    fy = y + 70
-    draw.text((PADDING + 28, fy), "Видео", font=_font(26, bold=True), fill=ACCENT_4)
-    fy += 40
-    vmax = max((c for _, c in video_formats), default=1) or 1
-    if not video_formats:
-        draw.text((PADDING + 28, fy), "нет данных", font=_font(24), fill=MUTED)
-        fy += 40
+    fmt_top = col_top + donut_h + 20
+    fmt_h = HEIGHT - PADDING - fmt_top
+    _rounded_rect(
+        draw, (right_x, fmt_top, right_x + col_w, fmt_top + fmt_h), 20, CARD, CARD_BORDER
+    )
+    draw.text(
+        (right_x + 24, fmt_top + 18),
+        f"{ICON_HEADPHONES}  Популярные форматы",
+        font=_font(26, bold=True),
+        fill=TEXT,
+    )
+
+    # Video formats — one thick segmented bar
+    fy = fmt_top + 70
+    draw.text((right_x + 24, fy), f"{ICON_FILM}  Видео", font=_font(22, bold=True), fill=BLUE)
+    fy += 36
+    bar_w = col_w - 48
+    if video_formats:
+        vparts = [
+            (str(name), int(count), FORMAT_COLORS[i % len(FORMAT_COLORS)])
+            for i, (name, count) in enumerate(video_formats)
+        ]
+        _draw_segmented_bar(img, draw, right_x + 24, fy, bar_w, 34, vparts)
+        fy += 48
+        lx = right_x + 24
+        for i, (name, count) in enumerate(video_formats):
+            color = FORMAT_COLORS[i % len(FORMAT_COLORS)]
+            chip = f"{name} {_fmt_int(int(count))}"
+            draw.ellipse((lx, fy + 4, lx + 12, fy + 16), fill=color)
+            draw.text((lx + 18, fy), chip, font=_font(18), fill=MUTED)
+            tw, _ = _text_size(draw, chip, _font(18))
+            lx += tw + 36
+            if lx > right_x + col_w - 120:
+                lx = right_x + 24
+                fy += 26
+        fy += 34
     else:
-        for name, count in video_formats:
-            fy = _draw_hbar(draw, PADDING + 28, fy, inner_w, str(name), int(count), vmax, ACCENT_4)
-    fy += 8
-    draw.text((PADDING + 28, fy), "Аудио", font=_font(26, bold=True), fill=ACCENT_2)
-    fy += 40
-    amax = max((c for _, c in audio_formats), default=1) or 1
-    if not audio_formats:
-        draw.text((PADDING + 28, fy), "нет данных", font=_font(24), fill=MUTED)
-        fy += 40
+        draw.text((right_x + 24, fy), "нет данных", font=_font(20), fill=MUTED)
+        fy += 50
+
+    # Audio formats — one thick segmented bar
+    draw.text((right_x + 24, fy), f"{ICON_MUSIC}  Аудио", font=_font(22, bold=True), fill=AMBER)
+    fy += 36
+    if audio_formats:
+        aparts = [
+            (str(name), int(count), FORMAT_COLORS[(i + 2) % len(FORMAT_COLORS)])
+            for i, (name, count) in enumerate(audio_formats)
+        ]
+        _draw_segmented_bar(img, draw, right_x + 24, fy, bar_w, 34, aparts)
+        fy += 48
+        lx = right_x + 24
+        for i, (name, count) in enumerate(audio_formats):
+            color = FORMAT_COLORS[(i + 2) % len(FORMAT_COLORS)]
+            chip = f"{name} {_fmt_int(int(count))}"
+            draw.ellipse((lx, fy + 4, lx + 12, fy + 16), fill=color)
+            draw.text((lx + 18, fy), chip, font=_font(18), fill=MUTED)
+            tw, _ = _text_size(draw, chip, _font(18))
+            lx += tw + 36
     else:
-        for name, count in audio_formats:
-            fy = _draw_hbar(draw, PADDING + 28, fy, inner_w, str(name), int(count), amax, ACCENT_2)
-    y = fy + 36
+        draw.text((right_x + 24, fy), "нет данных", font=_font(20), fill=MUTED)
 
     # Footer
     draw.text(
-        (PADDING, y),
-        "komuzik · обновляется кэшем раз в 5 мин",
-        font=_font(20),
+        (PADDING, HEIGHT - 28),
+        "komuzik · кэш 5 мин",
+        font=_font(16),
         fill=(100, 116, 139),
     )
-    y += 50
 
-    cropped = img.crop((0, 0, WIDTH, min(y + PADDING, height)))
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     out = CACHE_DIR / f"stats_{period}_{int(time.time())}.png"
-    cropped.save(out, format="PNG", optimize=True)
+    img.save(out, format="PNG", optimize=True)
     return out
 
 
 async def get_stats_image(stats: dict[str, Any], period: str) -> Path:
     """Return cached or freshly rendered stats image for period."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_key = f"stats_{period}"
+    cache_key = f"stats_{CACHE_VERSION}_{period}"
     cache_path = CACHE_DIR / f"{cache_key}.png"
     meta_path = CACHE_DIR / f"{cache_key}.ts"
 
@@ -330,7 +487,6 @@ async def get_stats_image(stats: dict[str, Any], period: str) -> Path:
 
         loop = asyncio.get_running_loop()
         rendered = await loop.run_in_executor(None, render_stats_infographic, stats, period)
-        # Stable cache name
         final = CACHE_DIR / f"{cache_key}.png"
         try:
             if final.exists():
@@ -339,8 +495,7 @@ async def get_stats_image(stats: dict[str, Any], period: str) -> Path:
         except OSError:
             final = rendered
         meta_path.write_text(str(time.time()))
-        # cleanup old timestamped leftovers
-        for stale in CACHE_DIR.glob(f"stats_{period}_*.png"):
+        for stale in CACHE_DIR.glob(f"stats_*_{period}_*.png"):
             if stale.name != final.name:
                 try:
                     stale.unlink()

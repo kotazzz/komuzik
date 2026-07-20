@@ -6,6 +6,9 @@ session/*
 data/*
 !data/.gitkeep
 
+# Local preview fonts (Docker installs Nerd Fonts in the image)
+.fonts/
+
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/
