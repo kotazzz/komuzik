@@ -1568,6 +1568,7 @@ class BotHandlers:
         if not await self._check_download_limit(event, user_id, download_id):
             return
 
+        processing_msg = None
         file_path = None
         try:
             client = event.client
@@ -1592,8 +1593,6 @@ class BotHandlers:
                         self.bot_username,
                         **self._caption_kwargs(user_id),
                     )
-                    if processing_msg is not None:
-                        await processing_msg.delete()
 
                     self.stats.track_video_download(
                         user_id,
@@ -1622,6 +1621,11 @@ class BotHandlers:
                         )
                     )
         finally:
+            if processing_msg is not None:
+                try:
+                    await processing_msg.delete()
+                except Exception:
+                    pass
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
