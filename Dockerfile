@@ -7,6 +7,7 @@ WORKDIR /app
 # Install system dependencies required for yt-dlp, ffmpeg, Telethon, and stats fonts
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    git \
     wget \
     unzip \
     ca-certificates \

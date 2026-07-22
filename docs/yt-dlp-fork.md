@@ -13,6 +13,9 @@ Extractor Murrtube в upstream сломан после перехода сайт
 
 Источник задан в `pyproject.toml` → `[tool.uv.sources]`.
 
+Docker-сборка ставит пакет через git, поэтому в `Dockerfile` нужен пакет `git`
+(см. `apt-get install`).
+
 ## Когда вернуться на оригинал
 
 1. Проверить, что PR #17285 (или эквивалент) **merged**.
