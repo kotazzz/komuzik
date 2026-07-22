@@ -29,6 +29,9 @@ TWITTER_REGEX = re.compile(r"(https?://)?(www\.|mobile\.)?(twitter\.com|x\.com)/
 PINTEREST_REGEX = re.compile(
     r"(https?://)?(www\.|[a-z]{2}\.)?(pinterest\.com/pin/|pinterest\.co\.uk/pin/|pin\.it/)(\S+)"
 )
+HLS_HOST_REGEX = re.compile(
+    r"(https?://)?(www\.)?murrtube\.net/v/([A-Za-z0-9_-]+)"
+)
 
 # ============= Video Settings =============
 VIDEO_SETTINGS = _config.get_section("video")

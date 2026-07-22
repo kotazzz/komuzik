@@ -4,6 +4,7 @@ from pathlib import Path
 from komuzik.database import Database
 from komuzik.repository import (
     StatsRepository,
+    _history_platform_label,
     format_download_history_line,
     format_user_label,
 )
@@ -186,3 +187,7 @@ def test_format_user_label():
     assert format_user_label({"id": 2, "username": "bob"}) == "@bob"
     assert format_user_label({"id": 3}) == "аноним"
     assert format_user_label({"id": 4, "display_name": "Only Name"}) == "Only Name"
+
+
+def test_hls_host_history_label_is_blank():
+    assert _history_platform_label("hls_host") == ""

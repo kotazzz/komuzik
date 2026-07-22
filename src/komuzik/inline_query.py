@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .config import PINTEREST_REGEX, TIKTOK_REGEX, TWITTER_REGEX, YOUTUBE_REGEX
+from .config import HLS_HOST_REGEX, PINTEREST_REGEX, TIKTOK_REGEX, TWITTER_REGEX, YOUTUBE_REGEX
 
 ALLOWED_HEIGHTS = {360, 480, 720, 1080}
 DEFAULT_YOUTUBE_QUALITY = "720p"
@@ -58,6 +58,7 @@ def parse_inline_query(
             or TIKTOK_REGEX.search(candidate)
             or TWITTER_REGEX.search(candidate)
             or PINTEREST_REGEX.search(candidate)
+            or HLS_HOST_REGEX.search(candidate)
         ):
             url_token = candidate
             break
@@ -65,7 +66,7 @@ def parse_inline_query(
 
     if not url_token:
         # Fallback: search whole text for a URL-like match
-        for regex in (YOUTUBE_REGEX, TIKTOK_REGEX, TWITTER_REGEX, PINTEREST_REGEX):
+        for regex in (YOUTUBE_REGEX, TIKTOK_REGEX, TWITTER_REGEX, PINTEREST_REGEX, HLS_HOST_REGEX):
             match = regex.search(text)
             if match:
                 url_token = _normalize_url(match.group(0))
@@ -99,6 +100,15 @@ def parse_inline_query(
             mode="video",
             quality="auto",
             description="Pinterest · медиа",
+        )
+
+    if HLS_HOST_REGEX.search(url_token):
+        return ParsedInlineQuery(
+            url=url_token,
+            platform="hls_host",
+            mode="video",
+            quality="best",
+            description="Видео",
         )
 
     yt_match = YOUTUBE_REGEX.search(url_token)

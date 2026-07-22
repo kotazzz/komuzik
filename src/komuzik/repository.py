@@ -104,6 +104,8 @@ def _format_history_timestamp(timestamp: str | None) -> str:
 
 def _history_platform_label(platform: str | None) -> str:
     key = (platform or "").strip().lower()
+    if key == "hls_host":
+        return ""
     labels = {
         "youtube": "Ютуб",
         "youtube_shorts": "Ютуб шортс",
