@@ -6,9 +6,11 @@ import os
 import re
 import shutil
 import uuid
-from pathlib import Path
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from telethon import Button, events
 from telethon.errors import QueryIdInvalidError
@@ -17,6 +19,7 @@ from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
     DEFAULT_SEARCH_RESULTS,
+    HLS_HOST_REGEX,
     MSG_PRIVACY,
     MSG_START,
     PINTEREST_REGEX,
@@ -26,6 +29,7 @@ from .config import (
 )
 from .download_limiter import DownloadLimiter
 from .downloaders import (
+    download_hls_host_video,
     download_pinterest_content,
     download_tiktok_video,
     download_twitter_video,
@@ -839,6 +843,15 @@ class BotHandlers:
             await self._handle_tiktok(event, tiktok_match.group(0))
             return
 
+        # Check for HLS host
+        hls_match = HLS_HOST_REGEX.search(text)
+        if hls_match:
+            url = hls_match.group(0)
+            if not url.startswith(("http://", "https://")):
+                url = "https://" + url
+            await self._handle_hls_host(event, url)
+            return
+
         # Check for YouTube (including Shorts)
         youtube_match = YOUTUBE_REGEX.search(text)
         if not youtube_match:
@@ -1547,6 +1560,72 @@ class BotHandlers:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
 
+    async def _handle_hls_host(self, event: Message, url: str):
+        """Handle an HLS host video download."""
+        user_id, username = self._get_user_info(event)
+        download_id = str(uuid.uuid4())
+
+        if not await self._check_download_limit(event, user_id, download_id):
+            return
+
+        file_path = None
+        try:
+            client = event.client
+            if client is None:
+                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                return
+
+            async with client.action(event.chat_id, "video"):
+                try:
+                    processing_msg = await event.respond(
+                        "Загрузка видео... Пожалуйста, подождите."
+                    )
+                    logger.info(f"Downloading hls_host video: {url}")
+
+                    file_path, metadata = await download_hls_host_video(url)
+                    logger.info(f"hls_host video downloaded successfully: {file_path}")
+
+                    await send_video_content(
+                        event,
+                        file_path,
+                        metadata,
+                        self.bot_username,
+                        **self._caption_kwargs(user_id),
+                    )
+                    if processing_msg is not None:
+                        await processing_msg.delete()
+
+                    self.stats.track_video_download(
+                        user_id,
+                        "best",
+                        "hls_host",
+                        username,
+                        success=True,
+                        url=url,
+                        title=_media_title(metadata),
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error sending hls_host video: {e}")
+                    self.stats.track_video_download(
+                        user_id,
+                        "best",
+                        "hls_host",
+                        username,
+                        success=False,
+                        error_message=str(e),
+                        url=url,
+                    )
+                    await event.respond(
+                        format_download_error(
+                            e, context="Произошла ошибка при загрузке:"
+                        )
+                    )
+        finally:
+            if file_path:
+                self._cleanup_download_file(file_path)
+            await self.download_limiter.finish_download(user_id, download_id)
+
     async def _show_content_type_selection(self, event: Message, url: str):
         """Show content type selection buttons for YouTube (+ last format repeat)."""
         token = self._store_callback_url(url)
@@ -2226,7 +2305,7 @@ class BotHandlers:
 
     def _format_admin_panel(self) -> str:
         concurrent = self.stats.get_max_concurrent(
-            default=self.download_limiter._yaml_concurrent
+            default=self.download_limiter._yaml_concurrent  # noqa: SLF001
         )
         playlist_limit = self.stats.get_playlist_daily_limit()
         ban_count = self.stats.count_bans()
@@ -2872,7 +2951,7 @@ class BotHandlers:
     async def inline_query_handler(self, event):
         """Answer inline queries: URL download or YouTube text search.
 
-        Keep this path fast: Telegram cancels unanswered queries in ~1–2s while typing.
+        Keep this path fast: Telegram cancels unanswered queries in ~1-2s while typing.
         No preview/thumbs in inline — use /search in DM for Pillow preview.
         """
         t0 = asyncio.get_running_loop().time()
@@ -3187,6 +3266,10 @@ class BotHandlers:
             kind = "photo" if metadata.get("content_type") == "photo" else "video"
             return file_path, metadata, kind
 
+        if parsed.platform == "hls_host":
+            file_path, metadata = await download_hls_host_video(parsed.url)
+            return file_path, metadata, "video"
+
         raise ValueError(f"Unsupported platform: {parsed.platform}")
 
     def _track_inline_download(
@@ -3250,6 +3333,18 @@ class BotHandlers:
         elif parsed.platform == "pinterest":
             self.stats.track_pinterest_download(
                 user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+                url=parsed.url,
+                title=title,
+            )
+        elif parsed.platform == "hls_host":
+            self.stats.track_video_download(
+                user_id,
+                parsed.quality,
+                "hls_host",
                 username,
                 success=success,
                 error_message=error_message,
