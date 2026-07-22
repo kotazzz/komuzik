@@ -108,4 +108,7 @@ MSG_PRIVACY = t("privacy")
 TIKTOK_ERROR_MESSAGE = t("errors.tiktok")
 TWITTER_ERROR_MESSAGE = t("errors.twitter")
 PINTEREST_ERROR_MESSAGE = t("errors.pinterest")
+HLS_HOST_ERROR_MESSAGE = t("errors.download")
+HLS_HOST_MAX_RETRIES = 3
+HLS_HOST_RETRY_BACKOFF = 2
 

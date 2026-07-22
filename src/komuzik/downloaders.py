@@ -30,6 +30,9 @@ from .config import (
     DEFAULT_SEARCH_RESULTS,
     DEFAULT_VIDEO_HEIGHT,
     DEFAULT_VIDEO_WIDTH,
+    HLS_HOST_ERROR_MESSAGE,
+    HLS_HOST_MAX_RETRIES,
+    HLS_HOST_RETRY_BACKOFF,
     MAX_DOWNLOAD_SIZE_BYTES,
     PINTEREST_ERROR_MESSAGE,
     PINTEREST_MAX_RETRIES,
@@ -767,6 +770,66 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
     if cleanup_on_error and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
     raise Exception(TIKTOK_ERROR_MESSAGE)
+
+
+async def download_hls_host_video(url: str, max_retries: int | None = None) -> tuple[str, dict]:
+    """Download an HLS-host video and return the path and metadata."""
+    retries = _safe_int(max_retries, _safe_int(HLS_HOST_MAX_RETRIES, 3))
+    retries = max(1, retries)
+    temp_dir = tempfile.mkdtemp()
+    cleanup_on_error = True
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            loop = asyncio.get_running_loop()
+            ydl_opts = {
+                **YDLP_BASE_OPTS,
+                "format": "best",
+                "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
+            }
+            with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                info = cast(
+                    "dict[str, Any]",
+                    await loop.run_in_executor(None, ydl.extract_info, url, False),
+                )
+                _ensure_size_within_limit(_get_expected_size(info), "video")
+                await loop.run_in_executor(None, ydl.download, [url])
+
+            file_path = _find_downloaded_file(temp_dir)
+            _ensure_file_within_limit(file_path, "video")
+
+            metadata = {
+                "title": info.get("title") or info.get("description") or "",
+                "duration": _safe_int(info.get("duration"), 0),
+                "width": info.get("width", 0),
+                "height": info.get("height", 0),
+            }
+            cleanup_on_error = False
+            return file_path, metadata
+        except DownloadTooLargeError:
+            if cleanup_on_error and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise
+        except DownloadError as e:
+            last_error = e
+            if attempt < retries - 1:
+                await asyncio.sleep(HLS_HOST_RETRY_BACKOFF**attempt)
+                continue
+            logger.error("hls_host download failed after retries: %s url=%s", e, url)
+            if cleanup_on_error and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise Exception(HLS_HOST_ERROR_MESSAGE)
+        except Exception as e:
+            last_error = e
+            logger.error("hls_host download error: %s", e)
+            if cleanup_on_error and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            raise Exception(HLS_HOST_ERROR_MESSAGE)
+
+    if cleanup_on_error and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    raise Exception(HLS_HOST_ERROR_MESSAGE)
 
 
 async def send_playlist_album(
