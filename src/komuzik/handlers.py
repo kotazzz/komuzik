@@ -171,6 +171,36 @@ class BotHandlers:
 
         return wrapper
 
+    @staticmethod
+    def command_pattern(command: str) -> str:
+        r"""Build an anchored regex for ``/command`` with an optional @botname.
+
+        The trailing lookahead is what keeps commands from bleeding into each
+        other: without it ``^/user(?:@\w+)?(?:\s+(.+))?`` also matches
+        ``/users`` (the argument group happily matches nothing), so Telethon --
+        which dispatches to *every* matching handler -- fired both
+        ``users_handler`` and ``user_handler`` on a single ``/users``.
+
+        A lookahead is used rather than consuming the separator so multi-line
+        arguments (``/ban 1 reason\ndetails``) still match.
+        """
+        return rf"^/{command}(?:@\w+)?(?=\s|$)"
+
+    @staticmethod
+    def command_args(text: str | None, command: str) -> str | None:
+        """Return the argument tail of ``/command``, or None when absent."""
+        if not text:
+            return None
+        match = re.match(rf"^/{command}(?:@\w+)?(?:\s+(.*))?$", text, re.DOTALL)
+        if not match:
+            return None
+        args = (match.group(1) or "").strip()
+        return args or None
+
+    def _on_command(self, command: str):
+        """Register a ``/command`` handler guarded by :meth:`_requires_sender`."""
+        return self._on_message(self.command_pattern(command))
+
     def _on_message(self, pattern: str | None = None):
         """Register a NewMessage handler guarded by :meth:`_requires_sender`."""
 
@@ -183,27 +213,27 @@ class BotHandlers:
 
     def _register_handlers(self):
         """Register all event handlers."""
-        self._on_message(r"^/start(?:@\w+)?")(self.start_handler)
-        self._on_message(r"^/help(?:@\w+)?")(self.help_handler)
-        self._on_message(r"^/info(?:@\w+)?")(self.info_handler)
-        self._on_message(r"^/privacy(?:@\w+)?")(self.privacy_handler)
-        self._on_message(r"^/limits(?:@\w+)?")(self.limits_handler)
-        self._on_message(r"^/settings(?:@\w+)?")(self.settings_handler)
-        self._on_message(r"^/stats(?:@\w+)?")(self.stats_handler)
-        self._on_message(r"^/post(?:@\w+)?")(self.post_handler)
-        self._on_message(r"^/setstorage(?:@\w+)?")(self.setstorage_handler)
-        self._on_message(r"^/unsetstorage(?:@\w+)?")(self.unsetstorage_handler)
-        self._on_message(r"^/admin(?:@\w+)?")(self.admin_handler)
-        self._on_message(r"^/ban(?:@\w+)?(?:\s+(.+))?")(self.ban_handler)
-        self._on_message(r"^/unban(?:@\w+)?(?:\s+(.+))?")(self.unban_handler)
-        self._on_message(r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?")(self.setconcurrent_handler)
-        self._on_message(r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?")(self.setplaylistlimit_handler)
-        self._on_message(r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?")(self.setuserlimit_handler)
-        self._on_message(r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?")(self.unsetuserlimit_handler)
-        self._on_message(r"^/users(?:@\w+)?")(self.users_handler)
-        self._on_message(r"^/user(?:@\w+)?(?:\s+(.+))?")(self.user_handler)
-        self._on_message(r"^/report(?:@\w+)?")(self.report_handler)
-        self._on_message(r"^/search(?:@\w+)?(?:\s+(.+))?")(self.search_handler)
+        self._on_command("start")(self.start_handler)
+        self._on_command("help")(self.help_handler)
+        self._on_command("info")(self.info_handler)
+        self._on_command("privacy")(self.privacy_handler)
+        self._on_command("limits")(self.limits_handler)
+        self._on_command("settings")(self.settings_handler)
+        self._on_command("stats")(self.stats_handler)
+        self._on_command("post")(self.post_handler)
+        self._on_command("setstorage")(self.setstorage_handler)
+        self._on_command("unsetstorage")(self.unsetstorage_handler)
+        self._on_command("admin")(self.admin_handler)
+        self._on_command("ban")(self.ban_handler)
+        self._on_command("unban")(self.unban_handler)
+        self._on_command("setconcurrent")(self.setconcurrent_handler)
+        self._on_command("setplaylistlimit")(self.setplaylistlimit_handler)
+        self._on_command("setuserlimit")(self.setuserlimit_handler)
+        self._on_command("unsetuserlimit")(self.unsetuserlimit_handler)
+        self._on_command("users")(self.users_handler)
+        self._on_command("user")(self.user_handler)
+        self._on_command("report")(self.report_handler)
+        self._on_command("search")(self.search_handler)
         self._on_message()(self.message_handler)
         self.client.on(events.CallbackQuery())(self.callback_handler)
         self.client.on(events.InlineQuery())(self.inline_query_handler)
@@ -689,8 +719,7 @@ class BotHandlers:
             )
             return
 
-        match = re.match(r"^/search(?:@\w+)?(?:\s+(.+))?", text)
-        query = match.group(1) if match else None
+        query = self.command_args(text, "search")
 
         if not query:
             await event.respond(
@@ -833,7 +862,7 @@ class BotHandlers:
             return
 
         text = getattr(message_obj, "text", None) if message_obj is not None else None
-        if isinstance(text, str) and re.match(r"^/report(?:@\w+)?(?:\s|$)", text):
+        if isinstance(text, str) and re.match(self.command_pattern("report"), text):
             pass
         elif await self._reject_if_banned(event, user_id, chat_is_group=chat_is_group):
             return
@@ -2517,8 +2546,7 @@ class BotHandlers:
         if not self._is_bot_admin(user_id):
             return
         text = getattr(event.message, "text", None) or ""
-        match = re.match(r"^/user(?:@\w+)?(?:\s+(.+))?", text)
-        target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
+        target_id = self._parse_positive_int(self.command_args(text, "user"))
         if target_id is None:
             await event.respond("Пример: `/user 123456789`")
             return
@@ -2538,8 +2566,8 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None) or ""
-        match = re.match(r"^/ban(?:@\w+)?\s+(\d+)\s+(.+)", text, re.DOTALL)
+        args = self.command_args(getattr(event.message, "text", None), "ban") or ""
+        match = re.match(r"^(\d+)\s+(.+)", args, re.DOTALL)
         if not match:
             await event.respond("Пример: `/ban 123456789 причина`")
             return
@@ -2558,8 +2586,8 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None) or ""
-        match = re.match(r"^/unban(?:@\w+)?\s+(\d+)", text)
+        args = self.command_args(getattr(event.message, "text", None), "unban") or ""
+        match = re.match(r"^(\d+)", args)
         if not match:
             await event.respond("Пример: `/unban 123456789`")
             return
@@ -2573,9 +2601,9 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None)
-        match = re.match(r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?", text or "")
-        n = self._parse_positive_int(match.group(1) if match else None)
+        n = self._parse_positive_int(
+            self.command_args(getattr(event.message, "text", None), "setconcurrent")
+        )
         if n is None:
             await event.respond("Пример: `/setconcurrent 3` (число ≥ 1)")
             return
@@ -2587,9 +2615,9 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None)
-        match = re.match(r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?", text or "")
-        n = self._parse_positive_int(match.group(1) if match else None)
+        n = self._parse_positive_int(
+            self.command_args(getattr(event.message, "text", None), "setplaylistlimit")
+        )
         if n is None:
             await event.respond("Пример: `/setplaylistlimit 50` (число ≥ 1)")
             return
@@ -2600,9 +2628,7 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None)
-        match = re.match(r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?", text or "")
-        args = (match.group(1) or "").strip() if match else ""
+        args = self.command_args(getattr(event.message, "text", None), "setuserlimit") or ""
         parts = args.split()
         if len(parts) != 2:
             await event.respond("Пример: `/setuserlimit 123456789 100` (число ≥ 1)")
@@ -2620,9 +2646,9 @@ class BotHandlers:
         user_id, _ = self._get_user_info(event)
         if not self._is_bot_admin(user_id):
             return
-        text = getattr(event.message, "text", None)
-        match = re.match(r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?", text or "")
-        target_id = self._parse_positive_int((match.group(1) or "").strip() if match else None)
+        target_id = self._parse_positive_int(
+            self.command_args(getattr(event.message, "text", None), "unsetuserlimit")
+        )
         if target_id is None:
             await event.respond("Пример: `/unsetuserlimit 123456789`")
             return
