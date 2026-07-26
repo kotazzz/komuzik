@@ -250,6 +250,20 @@ class BotHandlers:
         if os.path.exists(directory):
             shutil.rmtree(directory)
 
+    @staticmethod
+    async def _discard_status(message) -> None:
+        """Delete a transient «Загрузка…» message, ignoring delete failures.
+
+        Must run in ``finally``: on the error path the status message is just as
+        stale as on the success path, and leaving it makes the bot look stuck.
+        """
+        if message is None:
+            return
+        try:
+            await message.delete()
+        except Exception as e:
+            logger.debug(f"Failed to delete status message: {e}")
+
     async def _check_download_limit(self, event: Message, user_id: int, download_id: str) -> bool:
         """Check if user can start a new download.
 
@@ -298,6 +312,7 @@ class BotHandlers:
             return
 
         file_path = None
+        processing_msg = None
         try:
             client = event.client
             if client is None:
@@ -321,8 +336,6 @@ class BotHandlers:
                         self.bot_username,
                         **self._caption_kwargs(user_id),
                     )
-                    if processing_msg is not None:
-                        await processing_msg.delete()
 
                     # Track successful download
                     track_func(
@@ -352,6 +365,7 @@ class BotHandlers:
                     )
         finally:
             # Always release the download slot
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -1507,11 +1521,7 @@ class BotHandlers:
             except Exception as send_error:
                 logger.error(f"Failed to send group error reply: {send_error}")
         finally:
-            if processing_msg is not None:
-                try:
-                    await processing_msg.delete()
-                except Exception:
-                    pass
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -1526,6 +1536,7 @@ class BotHandlers:
             return
 
         file_path = None
+        processing_msg = None
         try:
             client = event.client
             if client is None:
@@ -1549,8 +1560,6 @@ class BotHandlers:
                         self.bot_username,
                         **self._caption_kwargs(user_id),
                     )
-                    if processing_msg is not None:
-                        await processing_msg.delete()
 
                     # Track successful TikTok download
                     self.stats.track_tiktok_download(
@@ -1578,6 +1587,7 @@ class BotHandlers:
                     )
         finally:
             # Always release the download slot
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -1643,11 +1653,7 @@ class BotHandlers:
                         )
                     )
         finally:
-            if processing_msg is not None:
-                try:
-                    await processing_msg.delete()
-                except Exception:
-                    pass
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -1681,6 +1687,7 @@ class BotHandlers:
             return
 
         file_path = None
+        processing_msg = None
         try:
             client = event.client
             if client is None:
@@ -1704,8 +1711,6 @@ class BotHandlers:
                         self.bot_username,
                         **self._caption_kwargs(user_id),
                     )
-                    if processing_msg is not None:
-                        await processing_msg.delete()
 
                     self.stats.track_video_download(
                         user_id,
@@ -1734,6 +1739,7 @@ class BotHandlers:
                         )
                     )
         finally:
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -2108,6 +2114,7 @@ class BotHandlers:
             return
 
         file_path = None
+        processing_msg = None
         try:
             client = event.client
             if client is None:
@@ -2143,9 +2150,6 @@ class BotHandlers:
                             **caption_kw,
                         )
 
-                    if processing_msg is not None:
-                        await processing_msg.delete()
-
                     self.stats.track_tiktok_download(
                         user_id,
                         username,
@@ -2169,6 +2173,7 @@ class BotHandlers:
                         )
                     )
         finally:
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
@@ -2182,6 +2187,7 @@ class BotHandlers:
             return
 
         file_path = None
+        processing_msg = None
         try:
             client = event.client
             if client is None:
@@ -2216,9 +2222,6 @@ class BotHandlers:
                             **caption_kw,
                         )
 
-                    if processing_msg is not None:
-                        await processing_msg.delete()
-
                     self.stats.track_pinterest_download(
                         user_id,
                         username,
@@ -2242,6 +2245,7 @@ class BotHandlers:
                         )
                     )
         finally:
+            await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
