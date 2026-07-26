@@ -46,6 +46,7 @@ ICON_YOUTUBE = "\uf167"
 ICON_MUSIC = "\uf001"
 ICON_BOLT = "\uf0e7"
 ICON_PIN = "\uf08d"
+ICON_TWITTER = "\uf099"
 ICON_COMMENT = "\uf075"
 ICON_FILM = "\uf008"
 ICON_HEADPHONES = "\uf025"
@@ -329,6 +330,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         (ICON_YOUTUBE, "YouTube видео", int(stats.get("total_videos") or 0), BLUE),
         (ICON_MUSIC, "Аудио", int(stats.get("total_audio") or 0), AMBER),
         (ICON_BOLT, "TikTok", int(stats.get("total_tiktoks") or 0), TEAL),
+        (ICON_TWITTER, "Twitter/X", int(stats.get("total_twitter") or 0), BLUE),
         (ICON_PIN, "Pinterest", int(stats.get("total_pinterest") or 0), PINK),
     ]
     max_plat = max((v for _, _, v, _ in platforms), default=1) or 1

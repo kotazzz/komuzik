@@ -2179,7 +2179,7 @@ class BotHandlers:
                             **caption_kw,
                         )
 
-                    self.stats.track_tiktok_download(
+                    self.stats.track_twitter_download(
                         user_id,
                         username,
                         success=True,
@@ -2189,7 +2189,7 @@ class BotHandlers:
 
                 except Exception as e:
                     logger.error(f"Error sending Twitter content: {e}")
-                    self.stats.track_tiktok_download(
+                    self.stats.track_twitter_download(
                         user_id,
                         username,
                         success=False,
@@ -3408,8 +3408,17 @@ class BotHandlers:
                 url=parsed.url,
                 title=title,
             )
+        elif parsed.platform == "twitter":
+            self.stats.track_twitter_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+                url=parsed.url,
+                title=title,
+            )
         else:
-            # tiktok + twitter (existing DM path also uses tiktok tracker for twitter)
             self.stats.track_tiktok_download(
                 user_id,
                 username,

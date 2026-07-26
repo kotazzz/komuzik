@@ -14,11 +14,13 @@ DOWNLOAD_EVENT_TYPES = (
     "video_download",
     "audio_download",
     "tiktok_download",
+    "twitter_download",
     "pinterest_download",
 )
 VIDEO_LIKE_EVENT_TYPES = (
     "video_download",
     "tiktok_download",
+    "twitter_download",
     "pinterest_download",
 )
 AUDIO_EVENT_TYPES = ("audio_download",)
@@ -136,7 +138,7 @@ def _history_type_label(event_type: str | None, video_format: str | None) -> str
         return f"аудио {quality}".strip()
     if event_type == "tiktok_download":
         return "видео"
-    if event_type == "pinterest_download":
+    if event_type in {"twitter_download", "pinterest_download"}:
         return "медиа"
     return quality
 
@@ -364,6 +366,40 @@ class StatsRepository:
             title=title,
         )
 
+    def track_twitter_download(
+        self,
+        user_id: int,
+        username: str | None = None,
+        success: bool = True,
+        error_message: str | None = None,
+        source: str = "dm",
+        url: str | None = None,
+        title: str | None = None,
+    ):
+        """Track a Twitter/X download event.
+
+        Args:
+            user_id: Telegram user ID
+            username: Telegram username
+            success: Whether download was successful
+            error_message: Error message if download failed
+            source: Download source ('dm', 'inline' or 'group')
+            url: Source page URL when available
+            title: Media title when available
+
+        """
+        self._track_event(
+            "twitter_download",
+            user_id,
+            username,
+            platform="twitter",
+            success=success,
+            error_message=error_message,
+            source=source,
+            url=url,
+            title=title,
+        )
+
     def track_pinterest_download(
         self,
         user_id: int,
@@ -497,6 +533,7 @@ class StatsRepository:
             "total_videos": self._get_event_count("video_download", date_filter),
             "total_audio": self._get_event_count("audio_download", date_filter),
             "total_tiktoks": self._get_event_count("tiktok_download", date_filter),
+            "total_twitter": self._get_event_count("twitter_download", date_filter),
             "total_pinterest": self._get_event_count("pinterest_download", date_filter),
             "total_downloads": self._get_total_downloads(date_filter),
             "successful_downloads": self._get_successful_downloads(date_filter),

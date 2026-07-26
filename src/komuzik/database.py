@@ -177,6 +177,8 @@ class Database:
         self._ensure_column(cursor, "statistics", "title", "TEXT")
         self._ensure_column(cursor, "users", "display_name", "TEXT")
 
+        self._reclassify_twitter_downloads(cursor)
+
         # Create indexes for better query performance
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_statistics_event_type 
@@ -207,6 +209,28 @@ class Database:
         if "source" not in columns:
             cursor.execute("ALTER TABLE statistics ADD COLUMN source TEXT")
             logger.info("Migrated statistics table: added source column")
+
+    # Twitter/X downloads used to be recorded through the TikTok tracker, so they
+    # landed as event_type='tiktok_download', platform='tiktok'. Reclassify the
+    # rows we can still identify by URL. Rows written before the `url` column
+    # existed stay misattributed — there is nothing left to key on.
+    _TWITTER_URL_PREDICATE = """
+        url IS NOT NULL AND (
+            url LIKE '%twitter.com/%'
+            OR url LIKE '%//x.com/%'
+            OR url LIKE 'x.com/%'
+        )
+    """
+
+    def _reclassify_twitter_downloads(self, cursor: sqlite3.Cursor) -> None:
+        """Split historical Twitter/X events out of the TikTok bucket."""
+        cursor.execute(
+            f"""UPDATE statistics
+                SET event_type = 'twitter_download', platform = 'twitter'
+                WHERE event_type = 'tiktok_download' AND {self._TWITTER_URL_PREDICATE}"""
+        )
+        if cursor.rowcount > 0:
+            logger.info(f"Migrated {cursor.rowcount} Twitter/X rows out of tiktok_download")
 
     def _ensure_column(
         self, cursor: sqlite3.Cursor, table: str, column: str, column_def: str
