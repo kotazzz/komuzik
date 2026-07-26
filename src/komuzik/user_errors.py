@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from .downloaders import DownloadTimeoutError
 from .i18n import t
 
 # Substrings that mean login / age-gate / cookies rather than a bot bug.
@@ -49,6 +50,8 @@ def format_download_error(error: BaseException | str, *, context: str | None = N
     Access / 401 / 403 failures get a short standalone message (no raw yt-dlp dump).
     Other errors keep optional ``context`` prefix plus the original text.
     """
+    if isinstance(error, DownloadTimeoutError):
+        return t("errors.download_timeout")
     if is_access_restricted_error(error):
         return t("errors.download_unavailable")
     detail = str(error)

@@ -20,6 +20,7 @@ from telethon.tl.types import UpdateBotInlineSend
 
 from .config import (
     DEFAULT_SEARCH_RESULTS,
+    DOWNLOAD_TIMEOUT_SECONDS,
     HLS_HOST_REGEX,
     MSG_PRIVACY,
     MSG_START,
@@ -30,6 +31,7 @@ from .config import (
 )
 from .download_limiter import DownloadLimiter
 from .downloaders import (
+    DownloadTimeoutError,
     download_hls_host_video,
     download_pinterest_content,
     download_tiktok_video,
@@ -297,6 +299,24 @@ class BotHandlers:
         if os.path.exists(directory):
             shutil.rmtree(directory)
 
+    async def _bounded(self, awaitable):
+        """Run a download under the configured wall-clock budget.
+
+        Without this a stalled extractor holds the user's concurrency slot until
+        the process restarts — ``download_timeout_seconds`` was read from config
+        but never actually applied anywhere.
+
+        Cancelling the coroutine does not stop the underlying worker thread
+        (Python cannot kill threads); yt-dlp's ``socket_timeout`` is what bounds
+        the thread. This bounds what the *user* experiences and frees the slot.
+        """
+        try:
+            return await asyncio.wait_for(awaitable, timeout=DOWNLOAD_TIMEOUT_SECONDS)
+        except TimeoutError as e:
+            raise DownloadTimeoutError(
+                f"download exceeded {DOWNLOAD_TIMEOUT_SECONDS}s"
+            ) from e
+
     @staticmethod
     async def _discard_status(message) -> None:
         """Delete a transient «Загрузка…» message, ignoring delete failures.
@@ -373,7 +393,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading {content_type}: {url} with quality: {quality}")
 
-                    file_path, metadata = await download_func(url, quality)
+                    file_path, metadata = await self._bounded(download_func(url, quality))
                     logger.info(f"{content_type.capitalize()} downloaded successfully: {file_path}")
 
                     await send_func(
@@ -1360,7 +1380,7 @@ class BotHandlers:
                 file_path = None
                 try:
                     if mode == "audio":
-                        file_path, metadata = await download_youtube_audio(entry.url, quality)
+                        file_path, metadata = await self._bounded(download_youtube_audio(entry.url, quality))
                         self.stats.track_audio_download(
                             user_id,
                             quality,
@@ -1371,7 +1391,7 @@ class BotHandlers:
                             title=entry.title or _media_title(metadata),
                         )
                     else:
-                        file_path, metadata = await download_youtube_video(entry.url, quality)
+                        file_path, metadata = await self._bounded(download_youtube_video(entry.url, quality))
                         self.stats.track_video_download(
                             user_id,
                             quality,
@@ -1596,7 +1616,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading TikTok video: {url}")
 
-                    file_path, metadata = await download_tiktok_video(url)
+                    file_path, metadata = await self._bounded(download_tiktok_video(url))
                     logger.info(f"TikTok video downloaded successfully: {file_path}")
 
                     await send_video_content(
@@ -1661,7 +1681,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading hls_host video: {url}")
 
-                    file_path, metadata = await download_hls_host_video(url)
+                    file_path, metadata = await self._bounded(download_hls_host_video(url))
                     logger.info(f"hls_host video downloaded successfully: {file_path}")
 
                     await send_video_content(
@@ -1747,7 +1767,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading YouTube Short: {url}")
 
-                    file_path, metadata = await download_youtube_video(url, quality="best")
+                    file_path, metadata = await self._bounded(download_youtube_video(url, quality="best"))
                     logger.info(f"YouTube Short downloaded successfully: {file_path}")
 
                     await send_video_content(
@@ -2174,7 +2194,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading Twitter content: {url}")
 
-                    file_path, metadata = await download_twitter_video(url)
+                    file_path, metadata = await self._bounded(download_twitter_video(url))
                     logger.info(f"Twitter content downloaded successfully: {file_path}")
 
                     # Send appropriate content type
@@ -2247,7 +2267,7 @@ class BotHandlers:
                     )
                     logger.info(f"Downloading Pinterest content: {url}")
 
-                    file_path, metadata = await download_pinterest_content(url)
+                    file_path, metadata = await self._bounded(download_pinterest_content(url))
                     logger.info(f"Pinterest content downloaded successfully: {file_path}")
 
                     caption_kw = self._caption_kwargs(user_id)
@@ -3317,30 +3337,34 @@ class BotHandlers:
     async def _download_for_inline(self, parsed: ParsedInlineQuery) -> tuple[str, dict, str]:
         """Download media for an inline job. Returns (path, metadata, media_kind)."""
         if parsed.platform == "youtube" and parsed.mode == "audio":
-            file_path, metadata = await download_youtube_audio(parsed.url, parsed.quality)
+            file_path, metadata = await self._bounded(
+                download_youtube_audio(parsed.url, parsed.quality)
+            )
             return file_path, metadata, "audio"
 
         if parsed.platform in {"youtube", "youtube_shorts"}:
             quality = parsed.quality if parsed.platform == "youtube" else "best"
-            file_path, metadata = await download_youtube_video(parsed.url, quality)
+            file_path, metadata = await self._bounded(
+                download_youtube_video(parsed.url, quality)
+            )
             return file_path, metadata, "video"
 
         if parsed.platform == "tiktok":
-            file_path, metadata = await download_tiktok_video(parsed.url)
+            file_path, metadata = await self._bounded(download_tiktok_video(parsed.url))
             return file_path, metadata, "video"
 
         if parsed.platform == "twitter":
-            file_path, metadata = await download_twitter_video(parsed.url)
+            file_path, metadata = await self._bounded(download_twitter_video(parsed.url))
             kind = "photo" if metadata.get("content_type") == "photo" else "video"
             return file_path, metadata, kind
 
         if parsed.platform == "pinterest":
-            file_path, metadata = await download_pinterest_content(parsed.url)
+            file_path, metadata = await self._bounded(download_pinterest_content(parsed.url))
             kind = "photo" if metadata.get("content_type") == "photo" else "video"
             return file_path, metadata, kind
 
         if parsed.platform == "hls_host":
-            file_path, metadata = await download_hls_host_video(parsed.url)
+            file_path, metadata = await self._bounded(download_hls_host_video(parsed.url))
             return file_path, metadata, "video"
 
         raise ValueError(f"Unsupported platform: {parsed.platform}")

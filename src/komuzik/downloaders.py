@@ -64,6 +64,15 @@ class DownloadTooLargeError(Exception):
     """Raised when a media file exceeds the configured size limit."""
 
 
+class DownloadTimeoutError(Exception):
+    """Raised when a download exceeds the configured wall-clock budget.
+
+    Note that cancelling the awaiting coroutine does not stop the yt-dlp worker
+    thread — Python cannot kill a thread. The slot and the user are freed
+    immediately; the thread itself is bounded by yt-dlp's ``socket_timeout``.
+    """
+
+
 def _find_downloaded_file(
     temp_dir: str, expected_extension: str | None = None, allow_images: bool = False
 ) -> str:

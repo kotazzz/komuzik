@@ -17,7 +17,7 @@ def test_can_download_respects_db_concurrent():
         user_id = 123
 
         assert limiter.can_download(user_id)
-        limiter._active_downloads[user_id] = {"dl-1"}
+        limiter._active_downloads[user_id] = {"dl-1": limiter._timer()}
         assert not limiter.can_download(user_id)
 
         db.close()

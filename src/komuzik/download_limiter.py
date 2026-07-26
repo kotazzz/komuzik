@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .config_loader import ConfigLoader
@@ -22,6 +23,7 @@ class DownloadLimiter:
         config_loader: ConfigLoader | None = None,
         config_path: str | None = None,
         stats_repo: StatsRepository | None = None,
+        timer=time.monotonic,
     ):
         """Initialize the download limiter from config file.
 
@@ -29,6 +31,7 @@ class DownloadLimiter:
             config_loader: Reusable configuration loader instance.
             config_path: Path to config.yaml file. Used when config_loader is not provided.
             stats_repo: Repository for reading effective concurrent limit from DB.
+            timer: Monotonic clock, injectable for tests.
 
         """
         self.config = config_loader.config if config_loader else ConfigLoader(config_path).config
@@ -36,14 +39,15 @@ class DownloadLimiter:
 
         self._yaml_concurrent = self.download_config.get("max_concurrent_per_user", 1)
         self._stats = stats_repo
+        self._timer = timer
         self.UNLIMITED_USER_IDS = set(self.download_config.get("unlimited_user_ids", []))
         self.ADMIN_USER_IDS = set(self.download_config.get("admin_user_ids", []))
         self.DOWNLOAD_TIMEOUT = self.download_config.get("download_timeout_seconds", 3600)
-        self.CLEANUP_INTERVAL = self.download_config.get("cleanup_interval_seconds", 300)
 
-        # Dictionary to track active downloads per user
-        # Key: user_id, Value: set of download identifiers
-        self._active_downloads: dict[int, set[str]] = {}
+        # Active downloads per user: user_id -> {download_id: started_at}.
+        # Start times let us reap slots whose owning task died without running
+        # its finally block (loop shutdown, hard cancellation).
+        self._active_downloads: dict[int, dict[str, float]] = {}
         self._lock: asyncio.Lock | None = None
 
         logger.info(
@@ -62,6 +66,37 @@ class DownloadLimiter:
         """Compatibility alias for handlers that read the limit as an attribute."""
         return self.get_max_per_user()
 
+    def prune_stale(self) -> int:
+        """Release slots held longer than ``DOWNLOAD_TIMEOUT``.
+
+        Normally ``finish_download`` frees the slot in a ``finally``. That does
+        not run if the owning task is destroyed outright — loop shutdown, a hard
+        cancellation — and the user would then be locked out of downloads until
+        the process restarts. Pruning lazily on every check keeps this correct
+        without a background task to supervise.
+
+        Returns:
+            Number of slots released.
+
+        """
+        if not self._active_downloads:
+            return 0
+
+        cutoff = self._timer() - self.DOWNLOAD_TIMEOUT
+        released = 0
+        for user_id in list(self._active_downloads):
+            downloads = self._active_downloads[user_id]
+            for download_id in [d for d, started in downloads.items() if started <= cutoff]:
+                del downloads[download_id]
+                released += 1
+                logger.warning(
+                    f"Released stale download slot {download_id} of user {user_id} "
+                    f"(older than {self.DOWNLOAD_TIMEOUT}s)"
+                )
+            if not downloads:
+                del self._active_downloads[user_id]
+        return released
+
     def can_download(self, user_id: int) -> bool:
         """Check if user can start a new download.
 
@@ -76,8 +111,10 @@ class DownloadLimiter:
         if user_id in self.UNLIMITED_USER_IDS or user_id in self.ADMIN_USER_IDS:
             return True
 
+        self.prune_stale()
+
         # Check if user has reached the limit
-        active_count = len(self._active_downloads.get(user_id, set()))
+        active_count = len(self._active_downloads.get(user_id, {}))
         max_per_user = self.get_max_per_user()
         can_proceed = active_count < max_per_user
 
@@ -107,9 +144,9 @@ class DownloadLimiter:
                 return False
 
             if user_id not in self._active_downloads:
-                self._active_downloads[user_id] = set()
+                self._active_downloads[user_id] = {}
 
-            self._active_downloads[user_id].add(download_id)
+            self._active_downloads[user_id][download_id] = self._timer()
             logger.info(
                 f"User {user_id} started download {download_id}. Active: {len(self._active_downloads[user_id])}"
             )
@@ -129,14 +166,14 @@ class DownloadLimiter:
 
         async with self._lock:
             if user_id in self._active_downloads:
-                self._active_downloads[user_id].discard(download_id)
+                self._active_downloads[user_id].pop(download_id, None)
 
-                # Clean up empty sets
+                # Clean up empty entries
                 if not self._active_downloads[user_id]:
                     del self._active_downloads[user_id]
 
                 logger.info(
-                    f"User {user_id} finished download {download_id}. Active: {len(self._active_downloads.get(user_id, set()))}"
+                    f"User {user_id} finished download {download_id}. Active: {len(self._active_downloads.get(user_id, {}))}"
                 )
 
     def get_active_count(self, user_id: int) -> int:
@@ -149,7 +186,8 @@ class DownloadLimiter:
             Number of active downloads
 
         """
-        return len(self._active_downloads.get(user_id, set()))
+        self.prune_stale()
+        return len(self._active_downloads.get(user_id, {}))
 
     def is_unlimited_user(self, user_id: int) -> bool:
         """Check if user has unlimited downloads.

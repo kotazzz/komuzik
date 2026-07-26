@@ -70,7 +70,13 @@ YDLP_BASE_OPTS = {
     "quiet": YDLP_SETTINGS.get("quiet", True),
     "no_warnings": YDLP_SETTINGS.get("no_warnings", True),
     "noplaylist": YDLP_SETTINGS.get("noplaylist", True),
+    # Without this a stalled connection blocks the worker thread forever;
+    # asyncio.wait_for on the caller side cannot kill a thread, only stop waiting.
+    "socket_timeout": YDLP_SETTINGS.get("socket_timeout", 30),
 }
+
+# Wall-clock ceiling for one download, applied by handlers via asyncio.wait_for.
+DOWNLOAD_TIMEOUT_SECONDS = DOWNLOAD_SETTINGS.get("download_timeout_seconds", 3600)
 
 # ============= YouTube Settings =============
 YOUTUBE_SETTINGS = _config.get_section("youtube")
