@@ -1,6 +1,7 @@
 """Event handlers for Telegram bot commands and callbacks."""
 
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -149,40 +150,61 @@ class BotHandlers:
         self.download_limiter = download_limiter or DownloadLimiter()
         self._register_handlers()
 
+    @staticmethod
+    def _requires_sender(
+        handler: Callable[[Any], Awaitable[None]],
+    ) -> Callable[[Any], Awaitable[None]]:
+        """Skip message events that have no identifiable sender.
+
+        ``event.sender_id`` is ``None`` for anonymous group admins and for
+        service messages. Bans, download limits and statistics are all keyed by
+        user id, so such messages cannot be processed — dropping them is the
+        only correct option, and it keeps ``_get_user_info`` from raising.
+        """
+
+        @functools.wraps(handler)
+        async def wrapper(event):
+            if getattr(event, "sender_id", None) is None:
+                logger.debug("Skipping message without sender_id in chat %s", event.chat_id)
+                return
+            await handler(event)
+
+        return wrapper
+
+    def _on_message(self, pattern: str | None = None):
+        """Register a NewMessage handler guarded by :meth:`_requires_sender`."""
+
+        def register(handler):
+            builder = events.NewMessage(pattern=pattern) if pattern else events.NewMessage()
+            self.client.on(builder)(self._requires_sender(handler))
+            return handler
+
+        return register
+
     def _register_handlers(self):
         """Register all event handlers."""
-        self.client.on(events.NewMessage(pattern="/start"))(self.start_handler)
-        self.client.on(events.NewMessage(pattern="/help"))(self.help_handler)
-        self.client.on(events.NewMessage(pattern=r"^/info(?:@\w+)?"))(self.info_handler)
-        self.client.on(events.NewMessage(pattern="/privacy"))(self.privacy_handler)
-        self.client.on(events.NewMessage(pattern=r"^/limits(?:@\w+)?"))(self.limits_handler)
-        self.client.on(events.NewMessage(pattern="/settings"))(self.settings_handler)
-        self.client.on(events.NewMessage(pattern="/stats"))(self.stats_handler)
-        self.client.on(events.NewMessage(pattern="/post"))(self.post_handler)
-        self.client.on(events.NewMessage(pattern=r"^/setstorage(?:@\w+)?"))(self.setstorage_handler)
-        self.client.on(events.NewMessage(pattern=r"^/unsetstorage(?:@\w+)?"))(
-            self.unsetstorage_handler
-        )
-        self.client.on(events.NewMessage(pattern=r"^/admin(?:@\w+)?"))(self.admin_handler)
-        self.client.on(events.NewMessage(pattern=r"^/ban(?:@\w+)?(?:\s+(.+))?"))(self.ban_handler)
-        self.client.on(events.NewMessage(pattern=r"^/unban(?:@\w+)?(?:\s+(.+))?"))(self.unban_handler)
-        self.client.on(events.NewMessage(pattern=r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?"))(
-            self.setconcurrent_handler
-        )
-        self.client.on(events.NewMessage(pattern=r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?"))(
-            self.setplaylistlimit_handler
-        )
-        self.client.on(events.NewMessage(pattern=r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?"))(
-            self.setuserlimit_handler
-        )
-        self.client.on(events.NewMessage(pattern=r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?"))(
-            self.unsetuserlimit_handler
-        )
-        self.client.on(events.NewMessage(pattern=r"^/users(?:@\w+)?"))(self.users_handler)
-        self.client.on(events.NewMessage(pattern=r"^/user(?:@\w+)?(?:\s+(.+))?"))(self.user_handler)
-        self.client.on(events.NewMessage(pattern="/report"))(self.report_handler)
-        self.client.on(events.NewMessage(pattern=r"^/search(?:\s+(.+))?"))(self.search_handler)
-        self.client.on(events.NewMessage())(self.message_handler)
+        self._on_message(r"^/start(?:@\w+)?")(self.start_handler)
+        self._on_message(r"^/help(?:@\w+)?")(self.help_handler)
+        self._on_message(r"^/info(?:@\w+)?")(self.info_handler)
+        self._on_message(r"^/privacy(?:@\w+)?")(self.privacy_handler)
+        self._on_message(r"^/limits(?:@\w+)?")(self.limits_handler)
+        self._on_message(r"^/settings(?:@\w+)?")(self.settings_handler)
+        self._on_message(r"^/stats(?:@\w+)?")(self.stats_handler)
+        self._on_message(r"^/post(?:@\w+)?")(self.post_handler)
+        self._on_message(r"^/setstorage(?:@\w+)?")(self.setstorage_handler)
+        self._on_message(r"^/unsetstorage(?:@\w+)?")(self.unsetstorage_handler)
+        self._on_message(r"^/admin(?:@\w+)?")(self.admin_handler)
+        self._on_message(r"^/ban(?:@\w+)?(?:\s+(.+))?")(self.ban_handler)
+        self._on_message(r"^/unban(?:@\w+)?(?:\s+(.+))?")(self.unban_handler)
+        self._on_message(r"^/setconcurrent(?:@\w+)?(?:\s+(.+))?")(self.setconcurrent_handler)
+        self._on_message(r"^/setplaylistlimit(?:@\w+)?(?:\s+(.+))?")(self.setplaylistlimit_handler)
+        self._on_message(r"^/setuserlimit(?:@\w+)?(?:\s+(.+))?")(self.setuserlimit_handler)
+        self._on_message(r"^/unsetuserlimit(?:@\w+)?(?:\s+(.+))?")(self.unsetuserlimit_handler)
+        self._on_message(r"^/users(?:@\w+)?")(self.users_handler)
+        self._on_message(r"^/user(?:@\w+)?(?:\s+(.+))?")(self.user_handler)
+        self._on_message(r"^/report(?:@\w+)?")(self.report_handler)
+        self._on_message(r"^/search(?:@\w+)?(?:\s+(.+))?")(self.search_handler)
+        self._on_message()(self.message_handler)
         self.client.on(events.CallbackQuery())(self.callback_handler)
         self.client.on(events.InlineQuery())(self.inline_query_handler)
         self.client.on(events.Raw(UpdateBotInlineSend))(self.chosen_inline_handler)
@@ -653,7 +675,7 @@ class BotHandlers:
             )
             return
 
-        match = re.match(r"^/search(?:\s+(.+))?", text)
+        match = re.match(r"^/search(?:@\w+)?(?:\s+(.+))?", text)
         query = match.group(1) if match else None
 
         if not query:
