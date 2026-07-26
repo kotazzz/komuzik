@@ -79,25 +79,42 @@ from .playlist import (
 )
 from .repository import StatsRepository, format_download_history_line, format_user_label
 from .search_preview import render_search_preview_async
+from .state import TTLCache
 from .stats_infographic import get_stats_image
 from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 from .user_errors import format_download_error
 
 logger = logging.getLogger(__name__)
 
-# States for /report command state machine
-REPORT_STATES = {}
-ADMIN_PENDING: dict[int, str] = {}
 ADMIN_USERS_PAGE_SIZE = 15
 ADMIN_HISTORY_PAGE_SIZE = 10
 ADMIN_HISTORY_MAX = 50
 ADMIN_USERS_KIND_KNOWN = "known"
 ADMIN_USERS_KIND_ANON = "anon"
-PLAYLIST_STATES: dict[int, PlaylistSession] = {}
-CALLBACK_URLS: dict[str, str] = {}
-INLINE_JOBS: dict[str, ParsedInlineQuery] = {}
-SEARCH_SESSIONS: dict[str, dict[str, Any]] = {}
 INLINE_SEARCH_MAX = 5
+
+# Ephemeral per-user state. All of these are bounded and self-expiring: they are
+# populated far more often than they are consumed (an inline search writes one
+# entry per shown result per keystroke, of which the user picks at most one), so
+# a plain dict here leaks for the lifetime of the process.
+REPORT_STATES: TTLCache[int, bool] = TTLCache(
+    maxsize=1_000, ttl=30 * 60, name="report_states"
+)
+ADMIN_PENDING: TTLCache[int, str] = TTLCache(
+    maxsize=100, ttl=10 * 60, name="admin_pending"
+)
+PLAYLIST_STATES: TTLCache[int, PlaylistSession] = TTLCache(
+    maxsize=200, ttl=2 * 60 * 60, name="playlist_states"
+)
+CALLBACK_URLS: TTLCache[str, str] = TTLCache(
+    maxsize=20_000, ttl=60 * 60, name="callback_urls"
+)
+INLINE_JOBS: TTLCache[str, ParsedInlineQuery] = TTLCache(
+    maxsize=5_000, ttl=15 * 60, name="inline_jobs"
+)
+SEARCH_SESSIONS: TTLCache[str, dict[str, Any]] = TTLCache(
+    maxsize=1_000, ttl=30 * 60, name="search_sessions"
+)
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -824,7 +841,7 @@ class BotHandlers:
             if report_text.startswith("/"):
                 # Handle /cancel command
                 if report_text.strip() == "/cancel":
-                    del REPORT_STATES[user_id]
+                    REPORT_STATES.pop(user_id, None)
                     await event.respond("❌ Отправка отчета отменена.")
                 return
 
@@ -858,7 +875,7 @@ class BotHandlers:
             await event.respond("✅ Спасибо! Ваш отчет отправлен администраторам.")
 
             # Clear state
-            del REPORT_STATES[user_id]
+            REPORT_STATES.pop(user_id, None)
             return
 
         text = getattr(message_obj, "text", None) if message_obj is not None else None
