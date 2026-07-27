@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from telethon import events
 from telethon.tl.custom import Message
+from telethon.tl.types import UpdateBotInlineSend
 
 from ..download_limiter import DownloadLimiter
 from ..downloaders import (
