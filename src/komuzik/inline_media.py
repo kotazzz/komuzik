@@ -31,12 +31,6 @@ INLINE_PM_ERRORS = (
     TypeError,
 )
 
-
-def pm_unavailable_message() -> str:
-    return t("errors.pm_unavailable")
-
-
-# Back-compat for imports that expect a constant (evaluated at call sites via property-like use).
 PM_UNAVAILABLE_MESSAGE = t("errors.pm_unavailable")
 
 

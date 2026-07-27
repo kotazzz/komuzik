@@ -876,22 +876,6 @@ class StatsRepository:
         except Exception as e:
             logger.error(f"Failed to save report from {user_id}: {e}")
 
-    def get_all_reports(self) -> list:
-        """Get all reports from users.
-
-        Returns:
-            List of (user_id, username, report_text, timestamp) tuples
-
-        """
-        try:
-            results = self.db.fetchall(
-                "SELECT user_id, username, report_text, created_at FROM reports ORDER BY created_at DESC"
-            )
-            return results or []
-        except Exception as e:
-            logger.error(f"Failed to get reports: {e}")
-            return []
-
     def save_report_thread(
         self,
         admin_id: int,

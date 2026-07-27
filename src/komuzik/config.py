@@ -38,16 +38,11 @@ VIDEO_SETTINGS = _config.get_section("video")
 
 DEFAULT_VIDEO_WIDTH = VIDEO_SETTINGS.get("default_youtube_width", 1280)
 DEFAULT_VIDEO_HEIGHT = VIDEO_SETTINGS.get("default_youtube_height", 720)
-DEFAULT_TIKTOK_WIDTH = VIDEO_SETTINGS.get("default_tiktok_width", 720)
-DEFAULT_TIKTOK_HEIGHT = VIDEO_SETTINGS.get("default_tiktok_height", 1280)
 
 # ============= Download Settings =============
 DOWNLOAD_SETTINGS = _config.get_section("downloads")
 
-MAX_DOWNLOADS_PER_USER = DOWNLOAD_SETTINGS.get("max_concurrent_per_user", 3)
 MAX_DOWNLOAD_SIZE_BYTES = DOWNLOAD_SETTINGS.get("max_download_size_bytes", 2 * 1024 * 1024 * 1024)
-ADMIN_USER_IDS = set(DOWNLOAD_SETTINGS.get("admin_user_ids", []))
-UNLIMITED_USER_IDS = set(DOWNLOAD_SETTINGS.get("unlimited_user_ids", []))
 
 # ============= Audio Settings =============
 AUDIO_SETTINGS = _config.get_section("audio")

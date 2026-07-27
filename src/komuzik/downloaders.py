@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -162,17 +161,6 @@ def _find_downloaded_file(
     return file_path
 
 
-@asynccontextmanager
-async def temp_directory():
-    """Context manager for temporary directory cleanup."""
-    temp_dir = tempfile.mkdtemp()
-    try:
-        yield temp_dir
-    finally:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-
-
 async def get_available_formats(url: str) -> list[int]:
     """Get available video formats for a YouTube URL."""
     try:
@@ -201,12 +189,6 @@ async def get_available_formats(url: str) -> list[int]:
     except Exception as e:
         logger.error(f"Error getting available formats: {e}")
         return VIDEO_FALLBACK_QUALITIES
-
-
-async def get_media_title(url: str, fallback: str = "Медиа") -> str:
-    """Fetch a short title for inline results without downloading the file."""
-    title, _thumb = await get_media_preview(url, fallback=fallback)
-    return title
 
 
 def youtube_thumbnail_url(video_id: str | None) -> str | None:
@@ -616,18 +598,6 @@ def _reraise_size_limit(error: BaseException, label: str) -> None:
     raise error
 
 
-async def _download_content(
-    url: str, temp_dir: str, ydl_opts: dict[str, Any]
-) -> tuple[str, dict[str, Any]]:
-    """Download content using yt-dlp and return file path and info."""
-    with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-        info = cast(
-            "dict[str, Any]", await run_download(ydl.extract_info, url, False)
-        )
-        await run_download(ydl.download, [url])
-        return temp_dir, info
-
-
 async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, dict]:
     """Download a YouTube video and return the path and metadata."""
     temp_dir = tempfile.mkdtemp()
@@ -761,7 +731,6 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
     retries = max(1, retries)
 
     temp_dir = tempfile.mkdtemp()
-    last_error = None
     cleanup_on_error = True
 
     for attempt in range(retries):
@@ -804,7 +773,6 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                     shutil.rmtree(temp_dir)
                 _reraise_size_limit(e, "TikTok video")
             error_msg = str(e)
-            last_error = e
 
             # Check if it's an extraction error (likely temporary)
             if "Unable to extract" in error_msg or "webpage" in error_msg:
@@ -835,7 +803,6 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
-            last_error = e
             logger.error(
                 f"Unexpected error downloading TikTok (attempt {attempt + 1}/{retries}): {e}"
             )
@@ -856,7 +823,6 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
     retries = max(1, retries)
     temp_dir = tempfile.mkdtemp()
     cleanup_on_error = True
-    last_error = None
 
     for attempt in range(retries):
         try:
@@ -894,7 +860,6 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 _reraise_size_limit(e, "video")
-            last_error = e
             if attempt < retries - 1:
                 _clear_temp_dir(temp_dir)
                 await asyncio.sleep(HLS_HOST_RETRY_BACKOFF**attempt)
@@ -904,7 +869,6 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
                 shutil.rmtree(temp_dir)
             raise Exception(HLS_HOST_ERROR_MESSAGE)
         except Exception as e:
-            last_error = e
             logger.error("hls_host download error: %s", e)
             if cleanup_on_error and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
@@ -1260,7 +1224,6 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
         _clear_temp_dir(temp_dir)
 
     # Fall back to yt-dlp for videos
-    last_error = None
 
     for attempt in range(retries):
         try:
@@ -1310,7 +1273,6 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                     shutil.rmtree(temp_dir)
                 _reraise_size_limit(e, "Twitter content")
             error_msg = str(e)
-            last_error = e
 
             if attempt < retries - 1:
                 wait_time = TWITTER_RETRY_BACKOFF**attempt
@@ -1330,7 +1292,6 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
-            last_error = e
             logger.error(
                 f"Unexpected error downloading Twitter (attempt {attempt + 1}/{retries}): {e}"
             )
@@ -1378,7 +1339,6 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
         logger.info(f"gallery-dl failed for Pinterest: {gallery_error}, trying yt-dlp")
         _clear_temp_dir(temp_dir)
 
-    last_error = None
 
     for attempt in range(retries):
         try:
@@ -1426,7 +1386,6 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
                     shutil.rmtree(temp_dir)
                 _reraise_size_limit(e, "Pinterest content")
             error_msg = str(e)
-            last_error = e
 
             if attempt < retries - 1:
                 wait_time = PINTEREST_RETRY_BACKOFF**attempt
@@ -1446,7 +1405,6 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
-            last_error = e
             logger.error(
                 f"Unexpected error downloading Pinterest (attempt {attempt + 1}/{retries}): {e}"
             )
