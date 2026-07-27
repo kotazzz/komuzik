@@ -489,13 +489,19 @@ async def _probe_video_file(file_path: str) -> dict[str, Any]:
 async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any]]:
     """Ensure MP4 is H.264+yuv420p (+AAC when possible) for Telegram iOS/macOS.
 
+    Already-H.264 files are returned as-is: yt-dlp is configured with
+    ``-movflags +faststart`` on this path, so a second copy-remux would only
+    rewrite gigabytes to disk for nothing.
+
     Returns:
         (path, probe_metadata) — path may be a new file in the same directory.
 
     """
     probe = await _probe_video_file(file_path)
     vcodec = probe.get("vcodec")
-    needs_reencode = not _is_h264_codec(vcodec if isinstance(vcodec, str) else None)
+    if _is_h264_codec(vcodec if isinstance(vcodec, str) else None):
+        logger.debug(f"Skipping remux for {file_path} (already H.264, faststart via yt-dlp)")
+        return file_path, probe
 
     out_path = str(Path(file_path).with_name(f"{Path(file_path).stem}_tg.mp4"))
 
@@ -504,64 +510,40 @@ async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {result.stderr[-2000:]}")
 
-    if needs_reencode:
-        logger.info(
-            f"Re-encoding {file_path} to H.264/AAC for Telegram iOS (source vcodec={vcodec!r})"
-        )
-        await run_media(
-            _run_ffmpeg,
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                file_path,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-movflags",
-                "+faststart",
-                out_path,
-            ],
-        )
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass
-        file_path = out_path
-    else:
-        # Remux with faststart so Telegram can stream without full download.
-        logger.debug(f"Remuxing {file_path} with +faststart (already H.264)")
-        await run_media(
-            _run_ffmpeg,
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                file_path,
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                out_path,
-            ],
-        )
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass
-        file_path = out_path
+    logger.info(
+        f"Re-encoding {file_path} to H.264/AAC for Telegram iOS (source vcodec={vcodec!r})"
+    )
+    await run_media(
+        _run_ffmpeg,
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            file_path,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            out_path,
+        ],
+    )
+    try:
+        os.remove(file_path)
+    except OSError:
+        pass
 
-    probe = await _probe_video_file(file_path)
-    return file_path, probe
+    probe = await _probe_video_file(out_path)
+    return out_path, probe
 
 
 def _get_expected_size(info: Mapping[str, Any]) -> int:
