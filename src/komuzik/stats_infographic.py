@@ -10,6 +10,8 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .executors import run_render
+
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 300
@@ -493,8 +495,7 @@ async def get_stats_image(stats: dict[str, Any], period: str) -> Path:
             except (ValueError, OSError):
                 pass
 
-        loop = asyncio.get_running_loop()
-        rendered = await loop.run_in_executor(None, render_stats_infographic, stats, period)
+        rendered = await run_render(render_stats_infographic, stats, period)
         final = CACHE_DIR / f"{cache_key}.png"
         try:
             if final.exists():

@@ -46,6 +46,7 @@ from .config import (
     VIDEO_FALLBACK_QUALITIES,
     YDLP_BASE_OPTS,
 )
+from .executors import enrich_semaphore, run_download, run_media
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +133,9 @@ async def temp_directory():
 async def get_available_formats(url: str) -> list[int]:
     """Get available video formats for a YouTube URL."""
     try:
-        loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
             info = cast(
-                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
             )
             formats = info.get("formats")
             if not isinstance(formats, list):
@@ -206,10 +206,9 @@ def thumbnail_from_ydl_entry(entry: Mapping[str, Any]) -> str | None:
 async def get_media_preview(url: str, fallback: str = "Медиа") -> tuple[str, str | None]:
     """Fetch title and thumbnail URL (used by /search preview collage)."""
     try:
-        loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
             info = cast(
-                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
             )
         title = info.get("title") or info.get("fulltitle") or fallback
         title = str(title).strip()
@@ -239,7 +238,6 @@ async def search_youtube(
     if max_results < 1:
         return []
     try:
-        loop = asyncio.get_running_loop()
         ydl_opts = {
             **YDLP_BASE_OPTS,
             "extract_flat": True,
@@ -252,7 +250,7 @@ async def search_youtube(
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
             search_results = cast(
                 "dict[str, Any]",
-                await loop.run_in_executor(None, ydl.extract_info, search_query, False),
+                await run_download(ydl.extract_info, search_query, False),
             )
             entries = search_results.get("entries")
             if not isinstance(entries, list):
@@ -297,15 +295,15 @@ async def enrich_youtube_search_stats(results: list[dict], *, timeout: float = 1
         if not isinstance(url, str) or not url:
             return item
         try:
-            loop = asyncio.get_running_loop()
-            ydl_opts = {**YDLP_BASE_OPTS, "skip_download": True}
+            async with enrich_semaphore():
+                ydl_opts = {**YDLP_BASE_OPTS, "skip_download": True}
 
-            def _extract() -> dict[str, Any]:
-                with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                return cast("dict[str, Any]", info or {})
+                def _extract() -> dict[str, Any]:
+                    with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                    return cast("dict[str, Any]", info or {})
 
-            info = await loop.run_in_executor(None, _extract)
+                info = await run_download(_extract)
             updated = dict(item)
             if updated.get("view_count") is None and info.get("view_count") is not None:
                 updated["view_count"] = info.get("view_count")
@@ -385,7 +383,6 @@ def _is_h264_codec(codec: str | None) -> bool:
 
 async def _probe_video_file(file_path: str) -> dict[str, Any]:
     """Read codec/dimensions/duration from a media file via ffprobe."""
-    loop = asyncio.get_running_loop()
 
     def _run() -> dict[str, Any]:
         result = subprocess.run(
@@ -411,7 +408,7 @@ async def _probe_video_file(file_path: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
 
-    probe = await loop.run_in_executor(None, _run)
+    probe = await run_media(_run)
     video_stream = next(
         (
             s
@@ -457,7 +454,6 @@ async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any
     vcodec = probe.get("vcodec")
     needs_reencode = not _is_h264_codec(vcodec if isinstance(vcodec, str) else None)
 
-    loop = asyncio.get_running_loop()
     out_path = str(Path(file_path).with_name(f"{Path(file_path).stem}_tg.mp4"))
 
     def _run_ffmpeg(args: list[str]) -> None:
@@ -469,8 +465,7 @@ async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any
         logger.info(
             f"Re-encoding {file_path} to H.264/AAC for Telegram iOS (source vcodec={vcodec!r})"
         )
-        await loop.run_in_executor(
-            None,
+        await run_media(
             _run_ffmpeg,
             [
                 "ffmpeg",
@@ -502,8 +497,7 @@ async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any
     else:
         # Remux with faststart so Telegram can stream without full download.
         logger.debug(f"Remuxing {file_path} with +faststart (already H.264)")
-        await loop.run_in_executor(
-            None,
+        await run_media(
             _run_ffmpeg,
             [
                 "ffmpeg",
@@ -554,12 +548,11 @@ async def _download_content(
     url: str, temp_dir: str, ydl_opts: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
     """Download content using yt-dlp and return file path and info."""
-    loop = asyncio.get_running_loop()
     with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
         info = cast(
-            "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+            "dict[str, Any]", await run_download(ydl.extract_info, url, False)
         )
-        await loop.run_in_executor(None, ydl.download, [url])
+        await run_download(ydl.download, [url])
         return temp_dir, info
 
 
@@ -570,10 +563,9 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
 
     try:
         # Get info first
-        loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
             info = cast(
-                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
             )
 
         _ensure_size_within_limit(_get_expected_size(info), "YouTube video")
@@ -599,7 +591,7 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
         }
 
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-            await loop.run_in_executor(None, ydl.download, [url])
+            await run_download(ydl.download, [url])
 
         # Find the downloaded file
         file_path = _find_downloaded_file(temp_dir, expected_extension="mp4")
@@ -628,10 +620,9 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
 
     try:
         # Get info first
-        loop = asyncio.get_running_loop()
         with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
             info = cast(
-                "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
             )
 
         _ensure_size_within_limit(_get_expected_size(info), "YouTube audio")
@@ -660,7 +651,7 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
         }
 
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-            await loop.run_in_executor(None, ydl.download, [url])
+            await run_download(ydl.download, [url])
 
         # Find the downloaded audio file
         file_path = _find_downloaded_file(temp_dir, AUDIO_FORMAT)
@@ -703,7 +694,6 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
 
     for attempt in range(retries):
         try:
-            loop = asyncio.get_running_loop()
             ydl_opts = {
                 **YDLP_BASE_OPTS,
                 "format": "best",
@@ -712,10 +702,10 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
 
             with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
                 info = cast(
-                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
                 )
                 _ensure_size_within_limit(_get_expected_size(info), "TikTok video")
-                await loop.run_in_executor(None, ydl.download, [url])
+                await run_download(ydl.download, [url])
 
             # Find the downloaded file
             file_path = _find_downloaded_file(temp_dir)
@@ -791,7 +781,6 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
 
     for attempt in range(retries):
         try:
-            loop = asyncio.get_running_loop()
             ydl_opts = {
                 **YDLP_BASE_OPTS,
                 "format": "best",
@@ -800,10 +789,10 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
             with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
                 info = cast(
                     "dict[str, Any]",
-                    await loop.run_in_executor(None, ydl.extract_info, url, False),
+                    await run_download(ydl.extract_info, url, False),
                 )
                 _ensure_size_within_limit(_get_expected_size(info), "video")
-                await loop.run_in_executor(None, ydl.download, [url])
+                await run_download(ydl.download, [url])
 
             file_path = _find_downloaded_file(temp_dir)
             _ensure_file_within_limit(file_path, "video")
@@ -1040,11 +1029,9 @@ async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str,
 
     """
     try:
-        loop = asyncio.get_running_loop()
         # Run gallery-dl to download content (supports both photos and videos)
         # Use --no-mtime to avoid issues, and flat directory structure
-        result = await loop.run_in_executor(
-            None,
+        result = await run_media(
             lambda: subprocess.run(
                 [
                     "gallery-dl",
@@ -1095,8 +1082,7 @@ async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str,
             # Try to get video duration using ffprobe if available
             duration = 0
             try:
-                probe_result = await loop.run_in_executor(
-                    None,
+                probe_result = await run_media(
                     lambda: subprocess.run(
                         [
                             "ffprobe",
@@ -1198,7 +1184,6 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
 
     for attempt in range(retries):
         try:
-            loop = asyncio.get_running_loop()
             ydl_opts = {
                 **YDLP_BASE_OPTS,
                 "format": "best",
@@ -1207,10 +1192,10 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
 
             with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
                 info = cast(
-                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
                 )
                 _ensure_size_within_limit(_get_expected_size(info), "Twitter content")
-                await loop.run_in_executor(None, ydl.download, [url])
+                await run_download(ydl.download, [url])
 
             # Try to find video/media files first, then fall back to images
             try:
@@ -1318,7 +1303,6 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
 
     for attempt in range(retries):
         try:
-            loop = asyncio.get_running_loop()
             ydl_opts = {
                 **YDLP_BASE_OPTS,
                 "format": "best",
@@ -1327,10 +1311,10 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
 
             with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
                 info = cast(
-                    "dict[str, Any]", await loop.run_in_executor(None, ydl.extract_info, url, False)
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
                 )
                 _ensure_size_within_limit(_get_expected_size(info), "Pinterest content")
-                await loop.run_in_executor(None, ydl.download, [url])
+                await run_download(ydl.download, [url])
 
             try:
                 file_path = _find_downloaded_file(temp_dir, allow_images=False)

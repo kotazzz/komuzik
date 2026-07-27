@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from typing import Any
 import yt_dlp
 
 from .config import YDLP_BASE_OPTS
+from .executors import run_download
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,6 @@ def _watch_url(video_id: str, *, is_music: bool) -> str:
 
 async def extract_playlist(url: str, *, is_music: bool) -> tuple[str, list[PlaylistEntry], bool]:
     """Flat-extract playlist. Returns (title, entries, truncated)."""
-    loop = asyncio.get_running_loop()
 
     def _run() -> tuple[str, list[PlaylistEntry], bool]:
         opts: dict[str, Any] = {
@@ -221,7 +220,7 @@ async def extract_playlist(url: str, *, is_music: bool) -> tuple[str, list[Playl
             entries = entries[:PLAYLIST_MAX_ENTRIES]
         return title, entries, truncated
 
-    return await loop.run_in_executor(None, _run)
+    return await run_download(_run)
 
 
 def format_preview_page(session: PlaylistSession) -> str:

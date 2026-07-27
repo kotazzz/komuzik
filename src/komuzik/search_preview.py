@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import tempfile
 import urllib.request
@@ -12,6 +11,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from .executors import run_render
 from .stats_infographic import _font, _rounded_rect, _text_size
 
 logger = logging.getLogger(__name__)
@@ -242,8 +242,6 @@ async def render_search_preview_async(
     start_index: int = 1,
 ) -> Path:
     """Run collage render off the event loop."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
+    return await run_render(
         lambda: render_search_preview(results, query, start_index=start_index),
     )

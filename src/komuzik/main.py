@@ -7,6 +7,7 @@ import os
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from . import executors
 from .config import API_HASH, API_ID, BOT_TOKEN, SESSION_STRING
 from .config_loader import ConfigLoader
 from .database import Database
@@ -71,6 +72,7 @@ async def main():
             await run_result
     finally:
         db.close()
+        executors.shutdown(wait=False)
         disconnect_result = client.disconnect()
         if asyncio.iscoroutine(disconnect_result):
             await disconnect_result
