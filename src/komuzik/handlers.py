@@ -18,6 +18,13 @@ from telethon.errors import QueryIdInvalidError
 from telethon.tl.custom import Message
 from telethon.tl.types import UpdateBotInlineSend
 
+from .broadcast import (
+    BroadcastConfig,
+    BroadcastControl,
+    broadcast_messages,
+    format_broadcast_progress,
+    format_broadcast_result,
+)
 from .config import (
     DEFAULT_SEARCH_RESULTS,
     DOWNLOAD_TIMEOUT_SECONDS,
@@ -117,6 +124,9 @@ INLINE_JOBS: TTLCache[str, ParsedInlineQuery] = TTLCache(
 SEARCH_SESSIONS: TTLCache[str, dict[str, Any]] = TTLCache(
     maxsize=1_000, ttl=30 * 60, name="search_sessions"
 )
+# Active /post broadcasts keyed by admin user id — allows the cancel button
+# to flip cancel_requested without racing a second concurrent broadcast.
+ACTIVE_BROADCASTS: dict[int, BroadcastControl] = {}
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -2324,6 +2334,12 @@ class BotHandlers:
             await event.respond("❌ У вас нет доступа к этой команде.")
             return
 
+        if user_id in ACTIVE_BROADCASTS:
+            await event.respond(
+                "⚠️ У вас уже идёт рассылка. Нажмите «⏹ Стоп» или дождитесь завершения."
+            )
+            return
+
         message_obj = cast("Message", event.message)
 
         # Check if it's a reply
@@ -2335,30 +2351,49 @@ class BotHandlers:
 
         try:
             reply_msg = await message_obj.get_reply_message()
-
-            processing_msg = await event.respond("📢 Отправляю сообщение всем пользователям...")
-
-            # Get all users from database
             users = self.stats.get_all_users()
-            sent_count = 0
-            failed_count = 0
+            user_ids = [uid for uid, _ in users]
+            cfg = BroadcastConfig.from_mapping(
+                self.download_limiter.config.get("broadcast")
+            )
+            control = BroadcastControl()
+            ACTIVE_BROADCASTS[user_id] = control
 
-            for user_id_target, _ in users:
+            processing_msg = await event.respond(
+                f"📢 Рассылка: 0/{len(user_ids)}…",
+                buttons=[[Button.inline("⏹ Стоп", data="post_cancel")]],
+            )
+
+            async def _send(target_id: int) -> None:
+                await self.client.send_message(target_id, reply_msg)
+
+            async def _progress(result) -> None:
+                if processing_msg is None:
+                    return
                 try:
-                    await self.client.send_message(user_id_target, reply_msg)
-                    sent_count += 1
+                    await processing_msg.edit(
+                        format_broadcast_progress(result),
+                        buttons=[[Button.inline("⏹ Стоп", data="post_cancel")]],
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to send message to user {user_id_target}: {e}")
-                    failed_count += 1
+                    logger.debug("Could not update broadcast progress: %s", e)
 
-            result = f"✅ Сообщение отправлено {sent_count} пользователям"
-            if failed_count > 0:
-                result += f"\n⚠️ Не удалось отправить {failed_count} пользователям"
+            try:
+                result = await broadcast_messages(
+                    _send,
+                    user_ids,
+                    config=cfg,
+                    control=control,
+                    on_progress=_progress,
+                )
+            finally:
+                ACTIVE_BROADCASTS.pop(user_id, None)
 
             if processing_msg is not None:
-                await processing_msg.edit(result)
+                await processing_msg.edit(format_broadcast_result(result), buttons=None)
 
         except Exception as e:
+            ACTIVE_BROADCASTS.pop(user_id, None)
             logger.error(f"Error in post handler: {e}")
             await event.respond(f"Произошла ошибка: {e!s}")
 
@@ -2826,6 +2861,18 @@ class BotHandlers:
                 return
             REPORT_STATES.pop(user_id, None)
             await event.edit("❌ Отправка отчета отменена.")
+            return
+
+        if data == "post_cancel":
+            if user_id is None or not self._is_bot_admin(user_id):
+                await event.answer("Нет доступа.", alert=True)
+                return
+            control = ACTIVE_BROADCASTS.get(user_id)
+            if control is None:
+                await event.answer("Активной рассылки нет.", alert=True)
+                return
+            control.cancel_requested = True
+            await event.answer("⏹ Останавливаю рассылку…")
             return
 
         if user_id is not None and await self._reject_if_banned(

@@ -103,3 +103,9 @@ executors:
   render_workers: 2
   # Сколько YouTube-extract'ов одновременно при «🖼 Превью»
   enrich_concurrency: 4
+
+# Админская рассылка /post — паузы между получателями и лимит FloodWait
+broadcast:
+  delay_seconds: 0.07
+  progress_every: 25
+  max_flood_wait_seconds: 120
