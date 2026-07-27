@@ -34,6 +34,7 @@ from ..downloaders import (
 )
 from ..i18n import t
 from ..inline_query import parse_inline_query
+from ..link_extract import extract_media_urls
 from ..playlist import find_playlist_url
 from ..search_preview import render_search_preview_async
 from ..user_errors import format_download_error
@@ -138,6 +139,12 @@ class DownloadsMixin:
         playlist_hit = find_playlist_url(text)
         if playlist_hit is not None:
             await self._start_playlist_session(event, user_id, playlist_hit[0], playlist_hit[1])
+            return
+
+        # Multiple media links → synthetic playlist session
+        media_links = extract_media_urls(text)
+        if len(media_links) >= 2:
+            await self._start_multi_link_session(event, user_id, media_links)
             return
 
         # Check for Twitter/X

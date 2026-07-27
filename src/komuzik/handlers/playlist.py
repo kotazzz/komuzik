@@ -1,5 +1,6 @@
 """YouTube playlist preview and batch download."""
 
+import asyncio
 import logging
 import uuid
 from typing import Any, cast
@@ -8,20 +9,36 @@ from telethon import Button
 from telethon.tl.custom import Message
 
 from ..downloaders import (
+    download_hls_host_video,
+    download_pinterest_content,
+    download_tiktok_video,
+    download_twitter_video,
     download_youtube_audio,
     download_youtube_video,
+    enrich_youtube_search_stats,
+    probe_media_for_playlist,
+    send_audio_content,
+    send_image_content,
     send_playlist_album,
+    send_video_content,
 )
 from ..i18n import t
+from ..link_extract import ParsedLink
 from ..playlist import (
+    MIX_YT_ONLY,
     PLAYLIST_BATCH_SIZE,
+    PLAYLIST_MAX_ENTRIES,
     PLAYLIST_PAGE_SIZE,
+    PlaylistEntry,
     PlaylistSession,
+    classify_mix_kind,
+    entry_to_collage_item,
     extract_playlist,
     format_preview_page,
     parse_exclusion_ops,
     selected_entries,
 )
+from ..search_preview import render_search_preview_async
 from ..storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 from .common import PLAYLIST_STATES, media_title
 
@@ -42,15 +59,46 @@ class PlaylistMixin:
         rows: list = []
         if nav:
             rows.append(nav)
-        rows.append(
-            [
-                Button.inline(t("playlist.buttons.video"), data="pl_video"),
-                Button.inline(t("playlist.buttons.audio"), data="pl_audio"),
-            ]
-        )
-        rows.append(
-            [Button.inline(t("playlist.buttons.download_selected", count=selected), data="pl_hint")]
-        )
+
+        kind = session.mix_kind
+        if kind == MIX_YT_ONLY:
+            rows.append(
+                [
+                    Button.inline(t("playlist.buttons.video"), data="pl_video"),
+                    Button.inline(t("playlist.buttons.audio"), data="pl_audio"),
+                ]
+            )
+            settings = self.stats.get_user_settings(session.user_id)
+            if settings.last_mode and settings.last_quality:
+                mode_label = (
+                    t("download.mode.audio")
+                    if settings.last_mode == "audio"
+                    else t("download.mode.video")
+                )
+                rows.append(
+                    [
+                        Button.inline(
+                            t(
+                                "playlist.buttons.repeat",
+                                mode=mode_label,
+                                quality=settings.last_quality,
+                            ),
+                            data="pl_repeat",
+                        )
+                    ]
+                )
+        else:
+            # non_yt_only / mixed — single download (no quality grid)
+            rows.append(
+                [
+                    Button.inline(
+                        t("playlist.buttons.download", count=selected),
+                        data="pl_download",
+                    )
+                ]
+            )
+
+        rows.append([Button.inline(t("playlist.buttons.preview"), data="pl_preview")])
         return rows
 
     async def _start_playlist_session(
@@ -77,6 +125,7 @@ class PlaylistMixin:
                 pass
             return
 
+        settings = self.stats.get_user_settings(user_id)
         session = PlaylistSession(
             user_id=user_id,
             playlist_url=url,
@@ -84,6 +133,69 @@ class PlaylistMixin:
             is_music=is_music,
             entries=entries,
             truncated=truncated,
+            source="youtube_playlist",
+            mix_kind=MIX_YT_ONLY,
+            default_quality=settings.default_quality or "720p",
+        )
+        PLAYLIST_STATES[user_id] = session
+        text = format_preview_page(session)
+        try:
+            await status.edit(text, buttons=self._playlist_buttons(session), link_preview=False)
+            session.preview_msg_id = int(status.id)
+        except Exception:
+            msg = await event.respond(
+                text, buttons=self._playlist_buttons(session), link_preview=False
+            )
+            session.preview_msg_id = int(msg.id)
+
+    async def _start_multi_link_session(
+        self, event: Message, user_id: int, links: list[ParsedLink]
+    ) -> None:
+        """Build a synthetic playlist from multiple media URLs."""
+        status = await event.respond(t("playlist.reading_links"))
+        capped = links[:PLAYLIST_MAX_ENTRIES]
+        truncated = len(links) > PLAYLIST_MAX_ENTRIES
+
+        async def _one(i: int, link: ParsedLink) -> PlaylistEntry:
+            return await probe_media_for_playlist(
+                link.url, platform=link.platform, index=i + 1
+            )
+
+        try:
+            entries = list(
+                await asyncio.gather(
+                    *[_one(i, link) for i, link in enumerate(capped)]
+                )
+            )
+        except Exception as e:
+            logger.error(f"Multi-link probe failed: {e}")
+            await event.respond(t("playlist.open_failed", error=str(e)))
+            try:
+                await status.delete()
+            except Exception:
+                pass
+            return
+
+        if not entries:
+            await event.respond(t("playlist.multi_empty"))
+            try:
+                await status.delete()
+            except Exception:
+                pass
+            return
+
+        settings = self.stats.get_user_settings(user_id)
+        mix_kind = classify_mix_kind(entries)
+        session = PlaylistSession(
+            user_id=user_id,
+            playlist_url="multi_links",
+            title=t("playlist.multi_title", count=len(entries)),
+            is_music=False,
+            entries=entries,
+            truncated=truncated,
+            source="multi_links",
+            mix_kind=mix_kind,
+            default_quality=settings.default_quality or "720p",
         )
         PLAYLIST_STATES[user_id] = session
         text = format_preview_page(session)
@@ -163,13 +275,44 @@ class PlaylistMixin:
             await event.answer(t("playlist.session_expired"), alert=True)
             return
 
-        if data == "pl_hint":
-            await event.answer(t("playlist.hint"), alert=True)
-            return
-
         if data == "pl_stop":
             session.cancel_requested = True
             await event.answer(t("playlist.stopping"))
+            return
+
+        if data == "pl_download":
+            if session.mix_kind == MIX_YT_ONLY:
+                await event.answer(t("playlist.hint"), alert=True)
+                return
+            await event.answer(
+                t("playlist.downloading_video", quality=session.default_quality)
+            )
+            await self._download_playlist(
+                event, session, mode="video", quality=session.default_quality
+            )
+            return
+
+        if data == "pl_repeat":
+            if session.mix_kind != MIX_YT_ONLY:
+                await event.answer()
+                return
+            settings = self.stats.get_user_settings(user_id)
+            if not settings.last_mode or not settings.last_quality:
+                await event.answer(t("playlist.preview.no_last_format"), alert=True)
+                return
+            mode = settings.last_mode
+            quality = settings.last_quality
+            key = (
+                "playlist.downloading_audio"
+                if mode == "audio"
+                else "playlist.downloading_video"
+            )
+            await event.answer(t(key, quality=quality))
+            await self._download_playlist(event, session, mode=mode, quality=quality)
+            return
+
+        if data == "pl_preview":
+            await self._send_playlist_collage(event, session)
             return
 
         if data == "pl_prev":
@@ -188,6 +331,9 @@ class PlaylistMixin:
             return
 
         if data == "pl_video":
+            if session.mix_kind != MIX_YT_ONLY:
+                await event.answer()
+                return
             buttons = [
                 [
                     Button.inline("360p", data="pl_vq_360p"),
@@ -211,6 +357,9 @@ class PlaylistMixin:
             return
 
         if data == "pl_audio":
+            if session.mix_kind != MIX_YT_ONLY:
+                await event.answer()
+                return
             buttons = [
                 [
                     Button.inline(t("playlist.buttons.quality_high"), data="pl_aq_high"),
@@ -457,32 +606,47 @@ class PlaylistMixin:
 
                 file_path = None
                 try:
-                    if mode == "audio":
-                        file_path, metadata = await self._bounded(download_youtube_audio(entry.url, quality))
-                        self.stats.track_audio_download(
-                            user_id,
-                            quality,
-                            username,
-                            success=True,
-                            source="dm",
-                            url=entry.url,
-                            title=entry.title or media_title(metadata),
+                    # Non-YouTube items cannot join a YT album batch — flush first.
+                    if entry.platform != "youtube" and batch:
+                        batch_progress = t("playlist.batch_sending", count=len(batch))
+                        await update_progress(
+                            t(
+                                "playlist.progress_batch",
+                                title=session.title,
+                                done=done,
+                                total=total,
+                                batch_progress=batch_progress,
+                            )
                         )
+                        await flush_batch()
+
+                    file_path, metadata, media_kind = await self._download_playlist_entry(
+                        entry, mode=mode, quality=quality
+                    )
+                    self._track_playlist_entry(
+                        entry,
+                        user_id=user_id,
+                        username=username,
+                        mode=mode,
+                        quality=quality,
+                        success=True,
+                        metadata=metadata,
+                    )
+
+                    if entry.platform != "youtube":
+                        await self._send_single_playlist_item(
+                            event, file_path, metadata, media_kind, caption_kw
+                        )
+                        self._cleanup_download_file(file_path)
+                        file_path = None
+                        sent += 1
+                        if not is_admin:
+                            self.stats.increment_playlist_usage(user_id, 1)
                     else:
-                        file_path, metadata = await self._bounded(download_youtube_video(entry.url, quality))
-                        self.stats.track_video_download(
-                            user_id,
-                            quality,
-                            "youtube",
-                            username,
-                            success=True,
-                            source="dm",
-                            url=entry.url,
-                            title=entry.title or media_title(metadata),
-                        )
-                    batch.append((file_path, metadata))
+                        batch.append((file_path, metadata))
+                        file_path = None
+
                     done += 1
-                    file_path = None
 
                     await update_progress(
                         t(
@@ -504,36 +668,22 @@ class PlaylistMixin:
                 except Exception as e:
                     fail += 1
                     logger.error(f"Playlist item failed {entry.url}: {e}")
-                    if mode == "audio":
-                        self.stats.track_audio_download(
-                            user_id,
-                            quality,
-                            username,
-                            success=False,
-                            error_message=str(e),
-                            source="dm",
-                            url=entry.url,
-                            title=entry.title,
-                        )
-                    else:
-                        self.stats.track_video_download(
-                            user_id,
-                            quality,
-                            "youtube",
-                            username,
-                            success=False,
-                            error_message=str(e),
-                            source="dm",
-                            url=entry.url,
-                            title=entry.title,
-                        )
+                    self._track_playlist_entry(
+                        entry,
+                        user_id=user_id,
+                        username=username,
+                        mode=mode,
+                        quality=quality,
+                        success=False,
+                        error_message=str(e),
+                    )
                     try:
                         await event.respond(
                             t(
                                 "playlist.skip_item",
                                 index=i,
                                 total=total,
-                                title=entry.title[:60],
+                                title=safe_title,
                                 error=str(e),
                             )
                         )
@@ -614,3 +764,173 @@ class PlaylistMixin:
             session.downloading = False
             await self.download_limiter.finish_download(user_id, download_id)
             PLAYLIST_STATES.pop(user_id, None)
+
+    async def _download_playlist_entry(
+        self, entry: PlaylistEntry, *, mode: str, quality: str
+    ) -> tuple[str, dict, str]:
+        """Download one playlist row; return (path, metadata, media_kind)."""
+        platform = entry.platform
+        if platform == "youtube":
+            if mode == "audio":
+                path, meta = await self._bounded(download_youtube_audio(entry.url, quality))
+                return path, meta, "audio"
+            path, meta = await self._bounded(download_youtube_video(entry.url, quality))
+            return path, meta, "video"
+        if platform == "tiktok":
+            path, meta = await self._bounded(download_tiktok_video(entry.url))
+            return path, meta, "video"
+        if platform == "twitter":
+            path, meta = await self._bounded(download_twitter_video(entry.url))
+            kind = "photo" if meta.get("content_type") == "photo" else "video"
+            return path, meta, kind
+        if platform == "pinterest":
+            path, meta = await self._bounded(download_pinterest_content(entry.url))
+            kind = "photo" if meta.get("content_type") == "photo" else "video"
+            return path, meta, kind
+        if platform == "hls_host":
+            path, meta = await self._bounded(download_hls_host_video(entry.url))
+            return path, meta, "video"
+        raise ValueError(f"unsupported playlist platform: {platform}")
+
+    def _track_playlist_entry(
+        self,
+        entry: PlaylistEntry,
+        *,
+        user_id: int,
+        username: str | None,
+        mode: str,
+        quality: str,
+        success: bool,
+        metadata: dict | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        title = entry.title or media_title(metadata)
+        platform = entry.platform
+        if platform == "youtube" and mode == "audio":
+            self.stats.track_audio_download(
+                user_id,
+                quality,
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "youtube":
+            self.stats.track_video_download(
+                user_id,
+                quality,
+                "youtube",
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "tiktok":
+            self.stats.track_tiktok_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "twitter":
+            self.stats.track_twitter_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "pinterest":
+            self.stats.track_pinterest_download(
+                user_id,
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        self.stats.track_video_download(
+            user_id,
+            "best",
+            platform,
+            username,
+            success=success,
+            error_message=error_message,
+            source="dm",
+            url=entry.url,
+            title=title,
+        )
+
+    async def _send_single_playlist_item(
+        self, event, file_path: str, metadata: dict, media_kind: str, caption_kw: dict
+    ) -> None:
+        """Send one non-album playlist item (TikTok / photo / etc.)."""
+        chat_id = event.chat_id
+
+        class _Shim:
+            def __init__(self, client, chat_id):
+                self.client = client
+                self.chat_id = chat_id
+
+            async def respond(self, *args, **kwargs):
+                return await self.client.send_message(self.chat_id, *args, **kwargs)
+
+        shim = _Shim(self.client, chat_id)
+        if media_kind == "audio":
+            await send_audio_content(
+                shim, file_path, metadata, self.bot_username, **caption_kw
+            )
+            return
+        if media_kind == "photo":
+            await send_image_content(
+                shim, file_path, self.bot_username, metadata=metadata, **caption_kw
+            )
+            return
+        await send_video_content(
+            shim, file_path, metadata, self.bot_username, **caption_kw
+        )
+
+    async def _send_playlist_collage(self, event, session: PlaylistSession) -> None:
+        """Render a /search-style collage for the current (non-excluded) entries."""
+        entries = selected_entries(session)
+        if not entries:
+            await event.answer(t("playlist.preview.collage_empty"), alert=True)
+            return
+        await event.answer(t("playlist.preview.collage_busy"))
+        items = [entry_to_collage_item(e) for e in entries[:PLAYLIST_PAGE_SIZE]]
+        try:
+            items = await enrich_youtube_search_stats(items, timeout=12.0)
+        except Exception as e:
+            logger.debug("playlist collage enrich failed: %s", e)
+        try:
+            image_path = await render_search_preview_async(
+                items, session.title, start_index=1
+            )
+            await event.respond(
+                file=str(image_path),
+                buttons=self._playlist_buttons(session),
+            )
+        except Exception as e:
+            logger.error(f"Playlist collage failed: {e}")
+            try:
+                await event.answer(
+                    t("playlist.preview.collage_failed", error=str(e)), alert=True
+                )
+            except Exception:
+                await event.respond(t("playlist.preview.collage_failed", error=str(e)))
+
