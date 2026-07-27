@@ -365,30 +365,24 @@ class BotHandlers:
         self,
         event: Message,
         url: str,
-        quality: str,
-        content_type: str,
-        download_func: Callable,
-        send_func: Callable,
-        track_func: Callable,
-        action: str,
-    ):
-        """Generic function to download and send content (video/audio).
+        *,
+        status_text: str,
+        error_context: str,
+        download: Callable[[], Awaitable[tuple[str, dict]]],
+        send: Callable[..., Awaitable[None]],
+        track: Callable[..., None],
+        action: str = "video",
+        log_label: str = "content",
+    ) -> None:
+        """Shared download → send → track → cleanup pipeline.
 
-        Args:
-            event: Telegram event
-            url: Content URL
-            quality: Quality setting
-            content_type: 'video' or 'audio' for logging
-            download_func: Function to download content
-            send_func: Function to send content
-            track_func: Function to track download stats
-            action: Telegram action type ('video' or 'audio')
-
+        Platform handlers only differ in status text, the download coroutine,
+        how media is sent, and which stats tracker is called — everything else
+        (limiter, ``_bounded``, status discard, temp cleanup) lives here once.
         """
         user_id, username = self._get_user_info(event)
         download_id = str(uuid.uuid4())
 
-        # Check download limit
         if not await self._check_download_limit(event, user_id, download_id):
             return
 
@@ -402,26 +396,21 @@ class BotHandlers:
 
             async with client.action(event.chat_id, action):
                 try:
-                    processing_msg = await event.respond(
-                        f"Загрузка {content_type}... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading {content_type}: {url} with quality: {quality}")
+                    processing_msg = await event.respond(status_text)
+                    logger.info("Downloading %s: %s", log_label, url)
 
-                    file_path, metadata = await self._bounded(download_func(url, quality))
-                    logger.info(f"{content_type.capitalize()} downloaded successfully: {file_path}")
+                    file_path, metadata = await self._bounded(download())
+                    logger.info("%s downloaded successfully: %s", log_label, file_path)
 
-                    await send_func(
+                    await send(
                         event,
                         file_path,
                         metadata,
-                        self.bot_username,
                         **self._caption_kwargs(user_id),
                     )
 
-                    # Track successful download
-                    track_func(
+                    track(
                         user_id,
-                        quality,
                         username,
                         success=True,
                         url=url,
@@ -429,27 +418,53 @@ class BotHandlers:
                     )
 
                 except Exception as e:
-                    logger.error(f"Error sending {content_type}: {e}")
-                    # Track failed download
-                    track_func(
+                    logger.error("Error sending %s: %s", log_label, e)
+                    track(
                         user_id,
-                        quality,
                         username,
                         success=False,
                         error_message=str(e),
                         url=url,
                     )
                     await event.respond(
-                        format_download_error(
-                            e, context=f"Произошла ошибка при обработке {content_type}:"
-                        )
+                        format_download_error(e, context=error_context)
                     )
         finally:
-            # Always release the download slot
             await self._discard_status(processing_msg)
             if file_path:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
+
+    async def _send_video_media(
+        self, event, file_path: str, metadata: dict, **caption_kw: Any
+    ) -> None:
+        await send_video_content(
+            event, file_path, metadata, self.bot_username, **caption_kw
+        )
+
+    async def _send_audio_media(
+        self, event, file_path: str, metadata: dict, **caption_kw: Any
+    ) -> None:
+        await send_audio_content(
+            event, file_path, metadata, self.bot_username, **caption_kw
+        )
+
+    async def _send_media_by_content_type(
+        self, event, file_path: str, metadata: dict, **caption_kw: Any
+    ) -> None:
+        """Send photo or video depending on downloader metadata."""
+        if metadata.get("content_type") == "photo":
+            await send_image_content(
+                event,
+                file_path,
+                self.bot_username,
+                metadata=metadata,
+                **caption_kw,
+            )
+        else:
+            await send_video_content(
+                event, file_path, metadata, self.bot_username, **caption_kw
+            )
 
     async def start_handler(self, event: Message):
         """Handle /start command."""
@@ -1613,135 +1628,44 @@ class BotHandlers:
 
     async def _handle_tiktok(self, event: Message, url: str):
         """Handle TikTok video download."""
-        user_id, username = self._get_user_info(event)
-        download_id = str(uuid.uuid4())
-
-        # Check download limit
-        if not await self._check_download_limit(event, user_id, download_id):
-            return
-
-        file_path = None
-        processing_msg = None
-        try:
-            client = event.client
-            if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
-                return
-
-            async with client.action(event.chat_id, "video"):
-                try:
-                    processing_msg = await event.respond(
-                        "Загрузка TikTok видео... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading TikTok video: {url}")
-
-                    file_path, metadata = await self._bounded(download_tiktok_video(url))
-                    logger.info(f"TikTok video downloaded successfully: {file_path}")
-
-                    await send_video_content(
-                        event,
-                        file_path,
-                        metadata,
-                        self.bot_username,
-                        **self._caption_kwargs(user_id),
-                    )
-
-                    # Track successful TikTok download
-                    self.stats.track_tiktok_download(
-                        user_id,
-                        username,
-                        success=True,
-                        url=url,
-                        title=_media_title(metadata),
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending TikTok video: {e}")
-                    # Track failed TikTok download
-                    self.stats.track_tiktok_download(
-                        user_id,
-                        username,
-                        success=False,
-                        error_message=str(e),
-                        url=url,
-                    )
-                    await event.respond(
-                        format_download_error(
-                            e, context="Произошла ошибка при обработке TikTok видео:"
-                        )
-                    )
-        finally:
-            # Always release the download slot
-            await self._discard_status(processing_msg)
-            if file_path:
-                self._cleanup_download_file(file_path)
-            await self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text="Загрузка TikTok видео... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке TikTok видео:",
+            download=lambda: download_tiktok_video(url),
+            send=self._send_video_media,
+            track=self.stats.track_tiktok_download,
+            action="video",
+            log_label="TikTok video",
+        )
 
     async def _handle_hls_host(self, event: Message, url: str):
         """Handle an HLS host video download."""
-        user_id, username = self._get_user_info(event)
-        download_id = str(uuid.uuid4())
 
-        if not await self._check_download_limit(event, user_id, download_id):
-            return
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
+            self.stats.track_video_download(
+                user_id,
+                "best",
+                "hls_host",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
+            )
 
-        processing_msg = None
-        file_path = None
-        try:
-            client = event.client
-            if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
-                return
-
-            async with client.action(event.chat_id, "video"):
-                try:
-                    processing_msg = await event.respond(
-                        "Загрузка видео... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading hls_host video: {url}")
-
-                    file_path, metadata = await self._bounded(download_hls_host_video(url))
-                    logger.info(f"hls_host video downloaded successfully: {file_path}")
-
-                    await send_video_content(
-                        event,
-                        file_path,
-                        metadata,
-                        self.bot_username,
-                        **self._caption_kwargs(user_id),
-                    )
-
-                    self.stats.track_video_download(
-                        user_id,
-                        "best",
-                        "hls_host",
-                        username,
-                        success=True,
-                        url=url,
-                        title=_media_title(metadata),
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending hls_host video: {e}")
-                    self.stats.track_video_download(
-                        user_id,
-                        "best",
-                        "hls_host",
-                        username,
-                        success=False,
-                        error_message=str(e),
-                        url=url,
-                    )
-                    await event.respond(
-                        format_download_error(
-                            e, context="Произошла ошибка при загрузке:"
-                        )
-                    )
-        finally:
-            await self._discard_status(processing_msg)
-            if file_path:
-                self._cleanup_download_file(file_path)
-            await self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text="Загрузка видео... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при загрузке:",
+            download=lambda: download_hls_host_video(url),
+            send=self._send_video_media,
+            track=track,
+            action="video",
+            log_label="hls_host video",
+        )
 
     async def _show_content_type_selection(self, event: Message, url: str):
         """Show content type selection buttons for YouTube (+ last format repeat)."""
@@ -1765,69 +1689,30 @@ class BotHandlers:
 
     async def _handle_youtube_shorts(self, event: Message, url: str):
         """Handle YouTube Shorts download."""
-        user_id, username = self._get_user_info(event)
-        download_id = str(uuid.uuid4())
 
-        if not await self._check_download_limit(event, user_id, download_id):
-            return
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
+            self.stats.track_video_download(
+                user_id,
+                "auto",
+                "youtube_shorts",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
+            )
 
-        file_path = None
-        processing_msg = None
-        try:
-            client = event.client
-            if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
-                return
-
-            async with client.action(event.chat_id, "video"):
-                try:
-                    processing_msg = await event.respond(
-                        "Загрузка YouTube Short... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading YouTube Short: {url}")
-
-                    file_path, metadata = await self._bounded(download_youtube_video(url, quality="best"))
-                    logger.info(f"YouTube Short downloaded successfully: {file_path}")
-
-                    await send_video_content(
-                        event,
-                        file_path,
-                        metadata,
-                        self.bot_username,
-                        **self._caption_kwargs(user_id),
-                    )
-
-                    self.stats.track_video_download(
-                        user_id,
-                        "auto",
-                        "youtube_shorts",
-                        username,
-                        success=True,
-                        url=url,
-                        title=_media_title(metadata),
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending YouTube Short: {e}")
-                    self.stats.track_video_download(
-                        user_id,
-                        "auto",
-                        "youtube_shorts",
-                        username,
-                        success=False,
-                        error_message=str(e),
-                        url=url,
-                    )
-                    await event.respond(
-                        format_download_error(
-                            e, context="Произошла ошибка при обработке YouTube Short:"
-                        )
-                    )
-        finally:
-            await self._discard_status(processing_msg)
-            if file_path:
-                self._cleanup_download_file(file_path)
-            await self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text="Загрузка YouTube Short... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке YouTube Short:",
+            download=lambda: download_youtube_video(url, quality="best"),
+            send=self._send_video_media,
+            track=track,
+            action="video",
+            log_label="YouTube Short",
+        )
 
     async def _handle_select_callback(self, event, data: str):
         """Handle video selection from search results."""
@@ -2065,15 +1950,7 @@ class BotHandlers:
     async def _download_and_send_video(self, event, url: str, quality: str):
         """Download and send YouTube video."""
 
-        def track_video(
-            user_id,
-            quality,
-            username,
-            success,
-            error_message=None,
-            url=None,
-            title=None,
-        ):
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
             self.stats.track_video_download(
                 user_id,
                 quality,
@@ -2091,28 +1968,21 @@ class BotHandlers:
                     logger.error(f"Failed to save last format: {e}")
 
         await self._download_and_send_content(
-            event=event,
-            url=url,
-            quality=quality,
-            content_type="видео",
-            download_func=download_youtube_video,
-            send_func=send_video_content,
-            track_func=track_video,
+            event,
+            url,
+            status_text="Загрузка видео... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке видео:",
+            download=lambda: download_youtube_video(url, quality),
+            send=self._send_video_media,
+            track=track,
             action="video",
+            log_label=f"видео ({quality})",
         )
 
     async def _download_and_send_audio(self, event, url: str, quality: str):
         """Download and send YouTube audio."""
 
-        def track_audio(
-            user_id,
-            quality,
-            username,
-            success=True,
-            error_message=None,
-            url=None,
-            title=None,
-        ):
+        def track(user_id, username, *, success=True, error_message=None, url=None, title=None):
             self.stats.track_audio_download(
                 user_id,
                 quality,
@@ -2129,14 +1999,15 @@ class BotHandlers:
                     logger.error(f"Failed to save last format: {e}")
 
         await self._download_and_send_content(
-            event=event,
-            url=url,
-            quality=quality,
-            content_type="аудио",
-            download_func=download_youtube_audio,
-            send_func=send_audio_content,
-            track_func=track_audio,
+            event,
+            url,
+            status_text="Загрузка аудио... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке аудио:",
+            download=lambda: download_youtube_audio(url, quality),
+            send=self._send_audio_media,
+            track=track,
             action="audio",
+            log_label=f"аудио ({quality})",
         )
 
     async def _handle_stats_callback(self, event, data: str):
@@ -2178,148 +2049,31 @@ class BotHandlers:
 
     async def _handle_twitter(self, event: Message, url: str):
         """Handle Twitter/X video and photo download."""
-        user_id, username = self._get_user_info(event)
-        download_id = str(uuid.uuid4())
-
-        if not await self._check_download_limit(event, user_id, download_id):
-            return
-
-        file_path = None
-        processing_msg = None
-        try:
-            client = event.client
-            if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
-                return
-
-            async with client.action(event.chat_id, "video"):
-                try:
-                    processing_msg = await event.respond(
-                        "Загрузка с Twitter... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading Twitter content: {url}")
-
-                    file_path, metadata = await self._bounded(download_twitter_video(url))
-                    logger.info(f"Twitter content downloaded successfully: {file_path}")
-
-                    # Send appropriate content type
-                    caption_kw = self._caption_kwargs(user_id)
-                    if metadata.get("content_type") == "photo":
-                        await send_image_content(
-                            event,
-                            file_path,
-                            self.bot_username,
-                            metadata=metadata,
-                            **caption_kw,
-                        )
-                    else:
-                        await send_video_content(
-                            event,
-                            file_path,
-                            metadata,
-                            self.bot_username,
-                            **caption_kw,
-                        )
-
-                    self.stats.track_twitter_download(
-                        user_id,
-                        username,
-                        success=True,
-                        url=url,
-                        title=_media_title(metadata),
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending Twitter content: {e}")
-                    self.stats.track_twitter_download(
-                        user_id,
-                        username,
-                        success=False,
-                        error_message=str(e),
-                        url=url,
-                    )
-                    await event.respond(
-                        format_download_error(
-                            e, context="Произошла ошибка при обработке контента:"
-                        )
-                    )
-        finally:
-            await self._discard_status(processing_msg)
-            if file_path:
-                self._cleanup_download_file(file_path)
-            await self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text="Загрузка с Twitter... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке контента:",
+            download=lambda: download_twitter_video(url),
+            send=self._send_media_by_content_type,
+            track=self.stats.track_twitter_download,
+            action="video",
+            log_label="Twitter content",
+        )
 
     async def _handle_pinterest(self, event: Message, url: str):
         """Handle Pinterest video and photo download."""
-        user_id, username = self._get_user_info(event)
-        download_id = str(uuid.uuid4())
-
-        if not await self._check_download_limit(event, user_id, download_id):
-            return
-
-        file_path = None
-        processing_msg = None
-        try:
-            client = event.client
-            if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
-                return
-
-            async with client.action(event.chat_id, "document"):
-                try:
-                    processing_msg = await event.respond(
-                        "Загрузка с Pinterest... Пожалуйста, подождите."
-                    )
-                    logger.info(f"Downloading Pinterest content: {url}")
-
-                    file_path, metadata = await self._bounded(download_pinterest_content(url))
-                    logger.info(f"Pinterest content downloaded successfully: {file_path}")
-
-                    caption_kw = self._caption_kwargs(user_id)
-                    if metadata.get("content_type") == "photo":
-                        await send_image_content(
-                            event,
-                            file_path,
-                            self.bot_username,
-                            metadata=metadata,
-                            **caption_kw,
-                        )
-                    else:
-                        await send_video_content(
-                            event,
-                            file_path,
-                            metadata,
-                            self.bot_username,
-                            **caption_kw,
-                        )
-
-                    self.stats.track_pinterest_download(
-                        user_id,
-                        username,
-                        success=True,
-                        url=url,
-                        title=_media_title(metadata),
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error sending Pinterest content: {e}")
-                    self.stats.track_pinterest_download(
-                        user_id,
-                        username,
-                        success=False,
-                        error_message=str(e),
-                        url=url,
-                    )
-                    await event.respond(
-                        format_download_error(
-                            e, context="Произошла ошибка при обработке Pinterest:"
-                        )
-                    )
-        finally:
-            await self._discard_status(processing_msg)
-            if file_path:
-                self._cleanup_download_file(file_path)
-            await self.download_limiter.finish_download(user_id, download_id)
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text="Загрузка с Pinterest... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке Pinterest:",
+            download=lambda: download_pinterest_content(url),
+            send=self._send_media_by_content_type,
+            track=self.stats.track_pinterest_download,
+            action="document",
+            log_label="Pinterest content",
+        )
 
     async def post_handler(self, event: Message):
         """Handle /post command for admin broadcast."""

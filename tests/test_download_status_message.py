@@ -59,33 +59,34 @@ def _make_handlers():
     return handlers
 
 
-def _run_download(*, download_func, send_func):
+def _run_download(*, download, send):
     handlers = _make_handlers()
     event = FakeEvent()
 
     asyncio.run(
         handlers._download_and_send_content(
-            event=event,
-            url="https://youtu.be/abcdefghijk",
-            quality="720p",
-            content_type="видео",
-            download_func=download_func,
-            send_func=send_func,
-            track_func=lambda *a, **k: None,
+            event,
+            "https://youtu.be/abcdefghijk",
+            status_text="Загрузка видео... Пожалуйста, подождите.",
+            error_context="Произошла ошибка при обработке видео:",
+            download=download,
+            send=send,
+            track=lambda *_a, **_k: None,
             action="video",
+            log_label="видео",
         )
     )
     return event
 
 
 def test_status_message_deleted_on_success():
-    async def download(_url, _quality):
+    async def download():
         return "/tmp/nonexistent/video.mp4", {"title": "T"}
 
     async def send(*_args, **_kwargs):
         return None
 
-    event = _run_download(download_func=download, send_func=send)
+    event = _run_download(download=download, send=send)
 
     status = event.responses[0]
     assert status.text.startswith("Загрузка видео")
@@ -95,13 +96,13 @@ def test_status_message_deleted_on_success():
 def test_status_message_deleted_on_download_failure():
     """Regression: the status used to survive errors, leaving the bot looking stuck."""
 
-    async def download(_url, _quality):
+    async def download():
         raise RuntimeError("boom")
 
     async def send(*_args, **_kwargs):
         raise AssertionError("send must not be reached")
 
-    event = _run_download(download_func=download, send_func=send)
+    event = _run_download(download=download, send=send)
 
     status = event.responses[0]
     assert status.deleted is True
@@ -110,13 +111,13 @@ def test_status_message_deleted_on_download_failure():
 
 
 def test_status_message_deleted_on_send_failure():
-    async def download(_url, _quality):
+    async def download():
         return "/tmp/nonexistent/video.mp4", {"title": "T"}
 
     async def send(*_args, **_kwargs):
         raise RuntimeError("upload rejected")
 
-    event = _run_download(download_func=download, send_func=send)
+    event = _run_download(download=download, send=send)
 
     assert event.responses[0].deleted is True
     assert any("upload rejected" in m.text for m in event.responses[1:])
