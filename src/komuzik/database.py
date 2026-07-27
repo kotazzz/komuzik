@@ -190,6 +190,13 @@ class Database:
             ON statistics(timestamp)
         """)
 
+        # Per-user history (/admin user downloads) filters by user_id and sorts
+        # by timestamp DESC — a composite index covers both predicates.
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_statistics_user_timestamp
+            ON statistics(user_id, timestamp)
+        """)
+
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_statistics_success 
             ON statistics(success)
