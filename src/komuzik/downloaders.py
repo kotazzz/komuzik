@@ -230,22 +230,83 @@ def thumbnail_from_ydl_entry(entry: Mapping[str, Any]) -> str | None:
 
 async def get_media_preview(url: str, fallback: str = "Медиа") -> tuple[str, str | None]:
     """Fetch title and thumbnail URL (used by /search preview collage)."""
+    entry = await probe_media_for_playlist(url, platform="youtube", index=0, fallback=fallback)
+    return entry.title, entry.thumbnail
+
+
+async def probe_media_for_playlist(
+    url: str,
+    *,
+    platform: str,
+    index: int,
+    fallback: str | None = None,
+) -> "PlaylistEntry":
+    """Best-effort metadata for a multi-link playlist row."""
+    from .playlist import PlaylistEntry, platform_emoji
+
+    label = fallback or platform_emoji(platform)
+    video_id = f"ml_{index}"
+    title = label
+    thumbnail = None
+    duration = None
+    channel = None
+    view_count = None
+    like_count = None
+
     try:
-        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
+        with yt_dlp.YoutubeDL(cast("Any", {**YDLP_BASE_OPTS, "skip_download": True})) as ydl:
             info = cast(
                 "dict[str, Any]", await run_download(ydl.extract_info, url, False)
             )
-        title = info.get("title") or info.get("fulltitle") or fallback
-        title = str(title).strip()
-        if len(title) > 64:
-            title = title[:61] + "..."
-        thumb = thumbnail_from_ydl_entry(info)
-        if not thumb:
-            thumb = youtube_thumbnail_url(info.get("id") if isinstance(info.get("id"), str) else None)
-        return (title or fallback), thumb
+        raw_id = info.get("id")
+        if isinstance(raw_id, str) and raw_id.strip():
+            video_id = raw_id.strip()[:64]
+        elif platform == "youtube":
+            m = re.search(r"(?:v=|/shorts/|youtu\.be/)([\w-]{11})", url)
+            if m:
+                video_id = m.group(1)
+        title = str(info.get("title") or info.get("fulltitle") or label).strip() or label
+        if len(title) > 80:
+            title = title[:77] + "..."
+        thumbnail = thumbnail_from_ydl_entry(info)
+        if not thumbnail and platform == "youtube":
+            thumbnail = youtube_thumbnail_url(video_id if len(video_id) == 11 else None)
+        dur = info.get("duration")
+        if isinstance(dur, (int, float)) and dur > 0:
+            duration = int(dur)
+        channel = info.get("channel") or info.get("uploader") or info.get("creator")
+        if channel is not None:
+            channel = str(channel)
+        if info.get("view_count") is not None:
+            try:
+                view_count = int(info["view_count"])
+            except (TypeError, ValueError):
+                view_count = None
+        if info.get("like_count") is not None:
+            try:
+                like_count = int(info["like_count"])
+            except (TypeError, ValueError):
+                like_count = None
     except Exception as e:
-        logger.warning(f"Failed to get media preview for {url}: {e}")
-        return fallback, None
+        logger.warning(f"Failed to probe media for playlist ({platform}): {url}: {e}")
+        if platform == "youtube":
+            m = re.search(r"(?:v=|/shorts/|youtu\.be/)([\w-]{11})", url)
+            if m:
+                video_id = m.group(1)
+                thumbnail = youtube_thumbnail_url(video_id)
+        title = title if title != label else (fallback or url)
+
+    return PlaylistEntry(
+        video_id=video_id,
+        title=title,
+        url=url,
+        platform=platform,
+        thumbnail=thumbnail,
+        duration=duration,
+        channel=channel,
+        view_count=view_count,
+        like_count=like_count,
+    )
 
 
 async def search_youtube(
