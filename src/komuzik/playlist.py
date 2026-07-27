@@ -32,11 +32,30 @@ MUSIC_PLAYLIST_REGEX = re.compile(
 
 @dataclass
 class PlaylistEntry:
-    """Single playlist item."""
+    """Single playlist / multi-link item."""
 
     video_id: str
     title: str
     url: str
+    platform: str = "youtube"
+    thumbnail: str | None = None
+    duration: int | None = None
+    channel: str | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+
+
+MIX_YT_ONLY = "yt_only"
+MIX_NON_YT_ONLY = "non_yt_only"
+MIX_MIXED = "mixed"
+
+PLATFORM_EMOJI = {
+    "youtube": "▶️",
+    "tiktok": "🎵",
+    "twitter": "🐦",
+    "pinterest": "📌",
+    "hls_host": "🎬",
+}
 
 
 @dataclass
@@ -54,6 +73,39 @@ class PlaylistSession:
     truncated: bool = False
     cancel_requested: bool = False
     downloading: bool = False
+    source: str = "youtube_playlist"  # youtube_playlist | multi_links
+    mix_kind: str = MIX_YT_ONLY
+    default_quality: str = "720p"  # used in mixed-mode warning quote
+
+
+def platform_emoji(platform: str) -> str:
+    return PLATFORM_EMOJI.get(platform, "🔗")
+
+
+def classify_mix_kind(entries: list[PlaylistEntry]) -> str:
+    """Classify a session by the platforms of its entries."""
+    platforms = {e.platform for e in entries}
+    if not platforms:
+        return MIX_YT_ONLY
+    if platforms == {"youtube"}:
+        return MIX_YT_ONLY
+    if "youtube" not in platforms:
+        return MIX_NON_YT_ONLY
+    return MIX_MIXED
+
+
+def entry_to_collage_item(entry: PlaylistEntry) -> dict[str, Any]:
+    """Shape used by ``render_search_preview`` / collage."""
+    return {
+        "id": entry.video_id,
+        "title": entry.title,
+        "url": entry.url,
+        "duration": entry.duration,
+        "channel": entry.channel or platform_emoji(entry.platform),
+        "thumbnail": entry.thumbnail,
+        "view_count": entry.view_count,
+        "like_count": entry.like_count,
+    }
 
 
 EXCLUSION_HELP = t("playlist.preview.exclusion_help")
@@ -234,19 +286,29 @@ def format_preview_page(session: PlaylistSession) -> str:
             pages=pages,
         ),
     ]
+    if session.mix_kind == MIX_MIXED:
+        lines.append("")
+        # Telegram blockquote: each line starts with >
+        warning = t(
+            "playlist.preview.mixed_warning",
+            quality=session.default_quality,
+        )
+        for wline in warning.splitlines():
+            lines.append(f"> {wline}" if wline else ">")
     if session.truncated:
         lines.append(t("playlist.preview.truncated", max=PLAYLIST_MAX_ENTRIES))
     lines.append("")
     lines.append(EXCLUSION_HELP)
     lines.append("")
 
+    show_emoji = session.mix_kind == MIX_MIXED or session.source == "multi_links"
     for i in range(start, end):
         entry = session.entries[i]
         num = i + 1
         mark = "❌ " if num in session.excluded else ""
-        # Escape markdown special chars lightly in title
         safe_title = entry.title.replace("[", "(").replace("]", ")")[:80]
-        lines.append(f"{mark}{num}. [{safe_title}]({entry.url})")
+        emoji = f"{platform_emoji(entry.platform)} " if show_emoji else ""
+        lines.append(f"{mark}{num}. {emoji}[{safe_title}]({entry.url})")
 
     return "\n".join(lines)
 

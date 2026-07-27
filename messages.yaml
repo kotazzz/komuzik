@@ -645,10 +645,15 @@ playlist:
   buttons:
     video: "🎬 Видео"
     audio: "🎵 Аудио"
-    download_selected: "✅ Скачать выбранное ({count})"
+    download: "⬇️ Скачать ({count})"
+    preview: "🖼 Превью"
     quality_high: "Высокое"
     quality_medium: "Среднее"
     quality_low: "Низкое"
+    repeat: "🔄 {mode} {quality}"
+  reading_links: "📃 Читаю ссылки…"
+  multi_title: "Ссылки ({count})"
+  multi_empty: "Не удалось разобрать ссылки."
   preview:
     exclusion_help: |-
       **Как убрать треки из загрузки**
@@ -666,3 +671,11 @@ playlist:
     stats: "Треков: {total} · к загрузке: **{selected}** · стр. {page}/{pages}"
     truncated: "⚠️ Показаны первые {max} треков."
     read_failed: "Не удалось прочитать плейлист"
+    mixed_warning: |-
+      Смешанный список: все ролики скачаются без выбора качества.
+      YouTube — видео **{quality}** (качество по умолчанию из настроек).
+      Остальные источники — как видео в доступном качестве.
+    no_last_format: "Нет сохранённого формата — выберите Видео или Аудио."
+    collage_empty: "Нечего показывать в превью."
+    collage_failed: "Не удалось нарисовать превью: {error}"
+    collage_busy: "Рисую превью…"
