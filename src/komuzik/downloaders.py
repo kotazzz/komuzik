@@ -74,10 +74,46 @@ class DownloadTimeoutError(Exception):
     """
 
 
+def _clear_temp_dir(temp_dir: str) -> None:
+    """Remove everything inside ``temp_dir`` without deleting the directory itself.
+
+    Used between download retries so a leftover ``.part`` / fragment from a failed
+    attempt cannot be picked up as the "downloaded" file on the next try.
+    """
+    if not os.path.isdir(temp_dir):
+        return
+    for name in os.listdir(temp_dir):
+        path = os.path.join(temp_dir, name)
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as e:
+            logger.debug(f"Failed to clear {path}: {e}")
+
+
+# Incomplete / sidecar files yt-dlp and friends leave behind. Never treat these
+# as the finished download — ``os.listdir`` order is arbitrary, so a .part can
+# otherwise beat a real media file that landed later in the same directory.
+_INCOMPLETE_SUFFIXES = (
+    ".part",
+    ".ytdl",
+    ".temp",
+    ".tmp",
+    ".download",
+    ".aria2",
+)
+_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
 def _find_downloaded_file(
     temp_dir: str, expected_extension: str | None = None, allow_images: bool = False
 ) -> str:
     """Find and verify downloaded file in temp directory.
+
+    Prefers the largest complete media file. Incomplete fragments (``.part``,
+    ``.ytdl``, …) are ignored so a leftover from a failed retry cannot win.
 
     Args:
         temp_dir: Directory to search in
@@ -95,24 +131,31 @@ def _find_downloaded_file(
     if not files:
         raise Exception("No files downloaded")
 
-    # Filter out thumbnails unless allow_images is True
-    if allow_images:
-        media_files = list(files)
-    else:
-        media_files = [f for f in files if not f.endswith((".jpg", ".png", ".webp"))]
+    candidates: list[str] = []
+    for name in files:
+        lower = name.lower()
+        if any(lower.endswith(suffix) for suffix in _INCOMPLETE_SUFFIXES):
+            continue
+        if not allow_images and lower.endswith(_IMAGE_SUFFIXES):
+            continue
+        candidates.append(name)
 
-    # If expected extension specified, try to find file with that extension first
     if expected_extension:
-        exact_match = [f for f in media_files if f.endswith(f".{expected_extension}")]
-        if exact_match:
-            media_files = exact_match
+        exact = [f for f in candidates if f.lower().endswith(f".{expected_extension.lower()}")]
+        if exact:
+            candidates = exact
 
-    if not media_files:
+    if not candidates:
         raise Exception("No media file found in download directory")
 
-    file_path = os.path.join(temp_dir, media_files[0])
+    # Largest non-empty file wins — deterministic across retries and platforms.
+    ranked = sorted(
+        (os.path.join(temp_dir, name) for name in candidates),
+        key=lambda path: Path(path).stat().st_size,
+        reverse=True,
+    )
+    file_path = ranked[0]
 
-    # Verify file is not empty
     if Path(file_path).stat().st_size == 0:
         raise Exception("The downloaded file is empty")
 
@@ -737,6 +780,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                         f"TikTok extraction failed (attempt {attempt + 1}/{retries}). "
                         f"Retrying in {wait_time}s... Error: {error_msg}"
                     )
+                    _clear_temp_dir(temp_dir)
                     await asyncio.sleep(wait_time)
                     continue
                 logger.error(
@@ -765,6 +809,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
+            _clear_temp_dir(temp_dir)
 
     if cleanup_on_error and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
@@ -812,6 +857,7 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
         except DownloadError as e:
             last_error = e
             if attempt < retries - 1:
+                _clear_temp_dir(temp_dir)
                 await asyncio.sleep(HLS_HOST_RETRY_BACKOFF**attempt)
                 continue
             logger.error("hls_host download failed after retries: %s url=%s", e, url)
@@ -1172,12 +1218,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
         logger.info(
             f"gallery-dl did not find content or failed: {gallery_error}, trying yt-dlp for video"
         )
-        # Clean temp_dir for yt-dlp
-        for f in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, f))
-            except Exception:
-                pass
+        _clear_temp_dir(temp_dir)
 
     # Fall back to yt-dlp for videos
     last_error = None
@@ -1233,6 +1274,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                     f"Twitter extraction failed (attempt {attempt + 1}/{retries}). "
                     f"Retrying in {wait_time}s... Error: {error_msg}"
                 )
+                _clear_temp_dir(temp_dir)
                 await asyncio.sleep(wait_time)
                 continue
             if cleanup_on_error and os.path.exists(temp_dir):
@@ -1252,10 +1294,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
-
-    if cleanup_on_error and os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-    raise Exception(TWITTER_ERROR_MESSAGE)
+            _clear_temp_dir(temp_dir)
 
 
 async def download_pinterest_content(url: str, max_retries: int | None = None) -> tuple[str, dict]:
@@ -1293,11 +1332,7 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
         raise
     except Exception as gallery_error:
         logger.info(f"gallery-dl failed for Pinterest: {gallery_error}, trying yt-dlp")
-        for filename in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, filename))
-            except Exception:
-                pass
+        _clear_temp_dir(temp_dir)
 
     last_error = None
 
@@ -1350,6 +1385,7 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
                     f"Pinterest extraction failed (attempt {attempt + 1}/{retries}). "
                     f"Retrying in {wait_time}s... Error: {error_msg}"
                 )
+                _clear_temp_dir(temp_dir)
                 await asyncio.sleep(wait_time)
                 continue
             if cleanup_on_error and os.path.exists(temp_dir):
@@ -1369,6 +1405,7 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
+            _clear_temp_dir(temp_dir)
 
     if cleanup_on_error and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
