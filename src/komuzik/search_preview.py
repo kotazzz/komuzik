@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from PIL import Image, ImageDraw
 
 from .executors import run_render
+from .i18n import t
 from .stats_infographic import _font, _rounded_rect, _text_size
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,14 @@ def fmt_compact(n: int | float | None) -> str:
     if value < 0:
         return "—"
     if value >= 1_000_000_000:
-        return f"{value / 1_000_000_000:.1f}".replace(".", ",").rstrip("0").rstrip(",") + " млрд"
+        num = f"{value / 1_000_000_000:.1f}".replace(".", ",").rstrip("0").rstrip(",")
+        return t("search.compact.billion", value=num)
     if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f}".replace(".", ",").rstrip("0").rstrip(",") + " млн"
+        num = f"{value / 1_000_000:.1f}".replace(".", ",").rstrip("0").rstrip(",")
+        return t("search.compact.million", value=num)
     if value >= 1_000:
-        return f"{value / 1_000:.1f}".replace(".", ",").rstrip("0").rstrip(",") + " тыс."
+        num = f"{value / 1_000:.1f}".replace(".", ",").rstrip("0").rstrip(",")
+        return t("search.compact.thousand", value=num)
     return str(value)
 
 
@@ -178,7 +182,7 @@ def render_search_preview(
     badge_font = _font(16, bold=True)
     num_font = _font(22, bold=True)
 
-    draw.text((PAD, 24), f"{ICON_YT}  Поиск", font=_font(26, bold=True), fill=ACCENT)
+    draw.text((PAD, 24), f"{ICON_YT}  {t('search.preview_collage.header')}", font=_font(26, bold=True), fill=ACCENT)
     q = query.strip()
     if len(q) > 60:
         q = q[:57] + "…"
@@ -186,7 +190,12 @@ def render_search_preview(
     end_index = start_index + len(results) - 1 if results else start_index - 1
     draw.text(
         (PAD, 60),
-        f"Результаты {start_index}–{max(end_index, start_index - 1)} · {len(results)} на странице",
+        t(
+            "search.preview_collage.results",
+            start=start_index,
+            end=max(end_index, start_index - 1),
+            count=len(results),
+        ),
         font=small_font,
         fill=MUTED,
     )
@@ -232,7 +241,7 @@ def render_search_preview(
         _rounded_rect(draw, (bx1, by1, bx2, by2), 6, BADGE_BG)
         draw.text((bx1 + 7, by1 + 4), dur, font=badge_font, fill=TEXT)
 
-        title = str(item.get("title") or "Без названия")
+        title = str(item.get("title") or t("common.untitled"))
         lines = _wrap_text(draw, title, title_font, text_max_w, max_lines=2)
         ty = y + 22
         for line in lines:

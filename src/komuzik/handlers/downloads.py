@@ -487,7 +487,7 @@ class DownloadsMixin:
             await event.answer(
                 t(
                     "download.repeat_format",
-                    mode="аудио" if mode == "audio" else "видео",
+                    mode=t("download.mode.audio") if mode == "audio" else t("download.mode.video"),
                     quality=quality,
                 )
             )

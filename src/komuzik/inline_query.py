@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from .config import HLS_HOST_REGEX, PINTEREST_REGEX, TIKTOK_REGEX, TWITTER_REGEX, YOUTUBE_REGEX
+from .i18n import t
 
 ALLOWED_HEIGHTS = {360, 480, 720, 1080}
 DEFAULT_YOUTUBE_QUALITY = "720p"
@@ -81,7 +82,7 @@ def parse_inline_query(
             platform="tiktok",
             mode="video",
             quality="auto",
-            description="TikTok · видео",
+            description=t("inline.job.tiktok"),
         )
 
     if TWITTER_REGEX.search(url_token):
@@ -90,7 +91,7 @@ def parse_inline_query(
             platform="twitter",
             mode="video",
             quality="auto",
-            description="Twitter/X · медиа",
+            description=t("inline.job.twitter"),
         )
 
     if PINTEREST_REGEX.search(url_token):
@@ -99,7 +100,7 @@ def parse_inline_query(
             platform="pinterest",
             mode="video",
             quality="auto",
-            description="Pinterest · медиа",
+            description=t("inline.job.pinterest"),
         )
 
     if HLS_HOST_REGEX.search(url_token):
@@ -108,7 +109,7 @@ def parse_inline_query(
             platform="hls_host",
             mode="video",
             quality="best",
-            description="Видео",
+            description=t("inline.job.hls_host"),
         )
 
     yt_match = YOUTUBE_REGEX.search(url_token)
@@ -121,7 +122,7 @@ def parse_inline_query(
             platform="youtube_shorts",
             mode="video",
             quality="best",
-            description="YouTube Shorts · видео",
+            description=t("inline.job.youtube_shorts"),
         )
 
     mode = "video"
@@ -139,7 +140,11 @@ def parse_inline_query(
                 mode = "video"
                 quality = f"{height}p"
 
-    description = "YouTube · аудио" if mode == "audio" else f"YouTube · {quality}"
+    description = (
+        t("inline.job.youtube_audio")
+        if mode == "audio"
+        else t("inline.job.youtube_video", quality=quality)
+    )
 
     return ParsedInlineQuery(
         url=url_token,

@@ -286,6 +286,9 @@ download:
   link_expired_download: "Ссылка для этой загрузки больше недоступна. Повторите поиск."
   no_saved_format: "Нет сохранённого формата — выберите вручную."
   repeat_format: "Повтор: {mode} {quality}..."
+  mode:
+    audio: "аудио"
+    video: "видео"
   video_quality_progress: "Загрузка видео в качестве {quality}..."
   audio_quality_progress: "Загрузка аудио в качестве {quality}..."
   buttons:
@@ -357,6 +360,23 @@ admin:
     banned: "🚫 **Заблокирован:** {reason}"
     empty: "Нет загрузок."
     page: "Записи {start}–{end} из {total}:"
+    platform:
+      youtube: "Ютуб"
+      youtube_shorts: "Ютуб шортс"
+      tiktok: "ТикТок"
+      twitter: "Твиттер"
+      pinterest: "Пинтерест"
+    quality:
+      high: "высокое"
+      medium: "среднее"
+      low: "низкое"
+    type:
+      video: "видео"
+      audio: "аудио"
+      media: "медиа"
+      video_with_quality: "видео {quality}"
+      audio_with_quality: "аудио {quality}"
+  user_anonymous: "аноним"
   examples:
     user: "Пример: `/user 123456789`"
     ban: "Пример: `/ban 123456789 причина`"
@@ -470,6 +490,13 @@ search:
   preview_building: "⏳ Собираю превью…"
   preview_caption: "🖼 Превью поиска: {query}"
   preview_failed: "Не удалось собрать превью."
+  preview_collage:
+    header: "Поиск"
+    results: "Результаты {start}–{end} · {count} на странице"
+  compact:
+    billion: "{value} млрд"
+    million: "{value} млн"
+    thousand: "{value} тыс."
   buttons:
     preview: "🖼 Превью"
     more: "➡️ Ещё 10"
@@ -495,6 +522,14 @@ inline:
   error_title: "Ошибка inline"
   error_description: "Попробуйте /search в ЛС"
   error_text: "Не удалось обработать inline-запрос."
+  job:
+    tiktok: "TikTok · видео"
+    twitter: "Twitter/X · медиа"
+    pinterest: "Pinterest · медиа"
+    hls_host: "Видео"
+    youtube_shorts: "YouTube Shorts · видео"
+    youtube_audio: "YouTube · аудио"
+    youtube_video: "YouTube · {quality}"
 
 stats:
   prompt: |-
@@ -507,6 +542,36 @@ stats:
     day: "📊 За день"
     month: "📅 За месяц"
     all: "📈 За все время"
+  period:
+    day: "за день"
+    month: "за месяц"
+    all: "за всё время"
+  caption:
+    header: "📊 Komuzik {period}"
+    sources: "ЛС {dm} · Inline {inline} · Группы {group}"
+  infographic:
+    title: "Статистика {period}"
+    kpi:
+      users: "Пользователи"
+      groups: "Группы"
+      searches: "Поиски"
+      downloads: "Загрузки"
+      success: "Успех"
+    downloads_result: "Результат загрузок"
+    platforms: "Платформы"
+    platform_youtube: "YouTube видео"
+    platform_audio: "Аудио"
+    source_and_type: "Источник и тип"
+    popular_formats: "Популярные форматы"
+    video: "Видео"
+    audio: "Аудио"
+    no_data: "нет данных"
+    footer: "komuzik · кэш 5 мин"
+    source_dm: "ЛС"
+    source_inline: "Inline"
+    source_group: "Группы"
+    source_mix: "ЛС {dm_pct}% · Inline {inline_pct}% · Группы {group_pct}%"
+    content_mix: "Видео {video_pct}%  ·  Аудио {audio_pct}%"
 
 playlist:
   reading: "📃 Читаю плейлист…"

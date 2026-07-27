@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .database import Database
+from .i18n import t
 from .timeutil import MSK, today_msk
 
 logger = logging.getLogger(__name__)
@@ -108,38 +109,36 @@ def _history_platform_label(platform: str | None) -> str:
     key = (platform or "").strip().lower()
     if key == "hls_host":
         return ""
-    labels = {
-        "youtube": "Ютуб",
-        "youtube_shorts": "Ютуб шортс",
-        "tiktok": "ТикТок",
-        "twitter": "Твиттер",
-        "pinterest": "Пинтерест",
-    }
-    return labels.get(key, platform.strip() if platform else "")
+    msg_key = f"admin.history.platform.{key}"
+    label = t(msg_key)
+    if label != msg_key:
+        return label
+    return platform.strip() if platform else ""
 
 
 def _history_quality_label(fmt: str | None) -> str:
     key = (fmt or "").strip().lower()
-    qualities = {
-        "high": "высокое",
-        "medium": "среднее",
-        "low": "низкое",
-    }
-    if key in qualities:
-        return qualities[key]
+    msg_key = f"admin.history.quality.{key}"
+    label = t(msg_key)
+    if label != msg_key:
+        return label
     return (fmt or "").strip()
 
 
 def _history_type_label(event_type: str | None, video_format: str | None) -> str:
     quality = _history_quality_label(video_format)
     if event_type == "video_download":
-        return f"видео {quality}".strip()
+        if quality:
+            return t("admin.history.type.video_with_quality", quality=quality)
+        return t("admin.history.type.video")
     if event_type == "audio_download":
-        return f"аудио {quality}".strip()
+        if quality:
+            return t("admin.history.type.audio_with_quality", quality=quality)
+        return t("admin.history.type.audio")
     if event_type == "tiktok_download":
-        return "видео"
+        return t("admin.history.type.video")
     if event_type in {"twitter_download", "pinterest_download"}:
-        return "медиа"
+        return t("admin.history.type.media")
     return quality
 
 
@@ -186,7 +185,7 @@ def format_user_label(user: dict) -> str:
         return display_name
     if username:
         return f"@{username}"
-    return "аноним"
+    return t("admin.user_anonymous")
 
 
 class StatsRepository:

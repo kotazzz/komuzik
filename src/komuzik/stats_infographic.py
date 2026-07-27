@@ -13,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from .executors import run_render
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,11 @@ CACHE_TTL_SECONDS = 300
 CACHE_VERSION = "v4"
 CACHE_DIR = Path("data/stats_cache")
 
-PERIOD_NAMES = {"day": "за день", "month": "за месяц", "all": "за всё время"}
+
+def _period_label(period: str) -> str:
+    key = f"stats.period.{period}"
+    label = t(key)
+    return label if label != key else period
 
 # Landscape canvas
 WIDTH = 1600
@@ -232,8 +237,7 @@ def _draw_donut(
 
 def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     """Render landscape 2-column stats PNG."""
-    period_names = {"day": "за день", "month": "за месяц", "all": "за всё время"}
-    period_label = period_names.get(period, period)
+    period_label = _period_label(period)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(img)
@@ -261,7 +265,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     draw.text((PADDING, y), f"{ICON_CHART}  KOMUZIK", font=_font(42, bold=True), fill=TEAL)
     draw.text(
         (PADDING + 320, y + 12),
-        f"Статистика {period_label}",
+        t("stats.infographic.title", period=period_label),
         font=_font(26),
         fill=MUTED,
     )
@@ -271,11 +275,11 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     card_w = (WIDTH - 2 * PADDING - 4 * GAP) // 5
     card_h = 100
     kpis = [
-        (ICON_USERS, "Пользователи", _fmt_int(int(stats.get("total_users") or 0)), TEAL),
-        (ICON_GROUP, "Группы", _fmt_int(int(stats.get("total_groups") or 0)), PINK),
-        (ICON_SEARCH, "Поиски", _fmt_int(int(stats.get("total_searches") or 0)), BLUE),
-        (ICON_DOWNLOAD, "Загрузки", _fmt_int(total), AMBER),
-        (ICON_CHECK, "Успех", f"{success_pct}%", GREEN),
+        (ICON_USERS, t("stats.infographic.kpi.users"), _fmt_int(int(stats.get("total_users") or 0)), TEAL),
+        (ICON_GROUP, t("stats.infographic.kpi.groups"), _fmt_int(int(stats.get("total_groups") or 0)), PINK),
+        (ICON_SEARCH, t("stats.infographic.kpi.searches"), _fmt_int(int(stats.get("total_searches") or 0)), BLUE),
+        (ICON_DOWNLOAD, t("stats.infographic.kpi.downloads"), _fmt_int(total), AMBER),
+        (ICON_CHECK, t("stats.infographic.kpi.success"), f"{success_pct}%", GREEN),
     ]
     for i, (icon, label, value, color) in enumerate(kpis):
         x = PADDING + i * (card_w + GAP)
@@ -295,7 +299,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     )
     draw.text(
         (left_x + 24, col_top + 20),
-        f"{ICON_DOWNLOAD}  Результат загрузок",
+        f"{ICON_DOWNLOAD}  {t('stats.infographic.downloads_result')}",
         font=_font(26, bold=True),
         fill=TEXT,
     )
@@ -329,13 +333,13 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     )
     draw.text(
         (left_x + 24, plat_top + 18),
-        f"{ICON_BOLT}  Платформы",
+        f"{ICON_BOLT}  {t('stats.infographic.platforms')}",
         font=_font(26, bold=True),
         fill=TEXT,
     )
     platforms = [
-        (ICON_YOUTUBE, "YouTube видео", int(stats.get("total_videos") or 0), BLUE),
-        (ICON_MUSIC, "Аудио", int(stats.get("total_audio") or 0), AMBER),
+        (ICON_YOUTUBE, t("stats.infographic.platform_youtube"), int(stats.get("total_videos") or 0), BLUE),
+        (ICON_MUSIC, t("stats.infographic.platform_audio"), int(stats.get("total_audio") or 0), AMBER),
         (ICON_BOLT, "TikTok", int(stats.get("total_tiktoks") or 0), TEAL),
         (ICON_TWITTER, "Twitter/X", int(stats.get("total_twitter") or 0), BLUE),
         (ICON_PIN, "Pinterest", int(stats.get("total_pinterest") or 0), PINK),
@@ -355,7 +359,7 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     )
     draw.text(
         (right_x + 24, col_top + 18),
-        f"{ICON_CHART}  Источник и тип",
+        f"{ICON_CHART}  {t('stats.infographic.source_and_type')}",
         font=_font(26, bold=True),
         fill=TEXT,
     )
@@ -367,7 +371,11 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         left_cx,
         cy,
         88,
-        [("ЛС", dm, BLUE), ("Inline", inline, TEAL), ("Группы", group, PINK)],
+        [
+            (t("stats.infographic.source_dm"), dm, BLUE),
+            (t("stats.infographic.source_inline"), inline, TEAL),
+            (t("stats.infographic.source_group"), group, PINK),
+        ],
         CARD,
     )
     _draw_donut(
@@ -375,7 +383,10 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
         right_cx,
         cy,
         88,
-        [("Видео", video_n, AMBER), ("Аудио", audio_n, CORAL)],
+        [
+            (t("stats.infographic.video"), video_n, AMBER),
+            (t("stats.infographic.audio"), audio_n, CORAL),
+        ],
         CARD,
     )
     # center icons
@@ -397,14 +408,22 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     group_pct = round(100 * group / src_total)
     draw.text(
         (left_cx - 130, col_top + 248),
-        f"ЛС {dm_pct}% · Inline {inline_pct}% · Группы {group_pct}%",
+        t(
+            "stats.infographic.source_mix",
+            dm_pct=dm_pct,
+            inline_pct=inline_pct,
+            group_pct=group_pct,
+        ),
         font=small,
         fill=MUTED,
     )
     draw.text(
         (right_cx - 120, col_top + 248),
-        f"Видео {round(100 * video_n / cont_total)}%  ·  "
-        f"Аудио {round(100 * audio_n / cont_total)}%",
+        t(
+            "stats.infographic.content_mix",
+            video_pct=round(100 * video_n / cont_total),
+            audio_pct=round(100 * audio_n / cont_total),
+        ),
         font=small,
         fill=MUTED,
     )
@@ -416,14 +435,19 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     )
     draw.text(
         (right_x + 24, fmt_top + 18),
-        f"{ICON_HEADPHONES}  Популярные форматы",
+        f"{ICON_HEADPHONES}  {t('stats.infographic.popular_formats')}",
         font=_font(26, bold=True),
         fill=TEXT,
     )
 
     # Video formats — one thick segmented bar
     fy = fmt_top + 70
-    draw.text((right_x + 24, fy), f"{ICON_FILM}  Видео", font=_font(22, bold=True), fill=BLUE)
+    draw.text(
+        (right_x + 24, fy),
+        f"{ICON_FILM}  {t('stats.infographic.video')}",
+        font=_font(22, bold=True),
+        fill=BLUE,
+    )
     fy += 36
     bar_w = col_w - 48
     if video_formats:
@@ -446,11 +470,16 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
                 fy += 26
         fy += 34
     else:
-        draw.text((right_x + 24, fy), "нет данных", font=_font(20), fill=MUTED)
+        draw.text((right_x + 24, fy), t("stats.infographic.no_data"), font=_font(20), fill=MUTED)
         fy += 50
 
     # Audio formats — one thick segmented bar
-    draw.text((right_x + 24, fy), f"{ICON_MUSIC}  Аудио", font=_font(22, bold=True), fill=AMBER)
+    draw.text(
+        (right_x + 24, fy),
+        f"{ICON_MUSIC}  {t('stats.infographic.audio')}",
+        font=_font(22, bold=True),
+        fill=AMBER,
+    )
     fy += 36
     if audio_formats:
         aparts = [
@@ -468,12 +497,12 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
             tw, _ = _text_size(draw, chip, _font(18))
             lx += tw + 36
     else:
-        draw.text((right_x + 24, fy), "нет данных", font=_font(20), fill=MUTED)
+        draw.text((right_x + 24, fy), t("stats.infographic.no_data"), font=_font(20), fill=MUTED)
 
     # Footer
     draw.text(
         (PADDING, HEIGHT - 28),
-        "komuzik · кэш 5 мин",
+        t("stats.infographic.footer"),
         font=_font(16),
         fill=(100, 116, 139),
     )
@@ -495,20 +524,18 @@ class StatsImage:
 
 def format_stats_caption(stats: dict[str, Any], period: str) -> str:
     """Caption that mirrors the numbers on the infographic."""
-    period_name = PERIOD_NAMES.get(period, period)
+    period_name = _period_label(period)
     total = int(stats.get("total_downloads") or 0)
     ok = int(stats.get("successful_downloads") or 0)
     success_pct = round(100 * ok / total) if total else 0
     by_source = stats.get("by_source") or {}
     return (
-        f"📊 Komuzik {period_name}\n"
+        f"{t('stats.caption.header', period=period_name)}\n"
         f"👥 {stats.get('total_users', 0)} · "
         f"💬 {stats.get('total_groups', 0)} · "
         f"📥 {total} · "
         f"✅ {success_pct}%\n"
-        f"ЛС {by_source.get('dm', 0)} · "
-        f"Inline {by_source.get('inline', 0)} · "
-        f"Группы {by_source.get('group', 0)}"
+        f"{t('stats.caption.sources', dm=by_source.get('dm', 0), inline=by_source.get('inline', 0), group=by_source.get('group', 0))}"
     )
 
 
