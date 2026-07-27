@@ -8,3 +8,35 @@ services:
     volumes:
       - ./session:/app/session
       - ./data:/app/data
+      # Optional: override baked-in config without rebuilding
+      # - ./config.yaml:/app/config.yaml:ro
+    tmpfs:
+      # Cap scratch space so parallel downloads cannot fill the host disk
+      - /tmp/komuzik:size=2g,mode=1777,uid=10001,gid=10001
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "uv",
+          "run",
+          "python",
+          "-c",
+          "import os, signal; os.kill(1, 0)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
