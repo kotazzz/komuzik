@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .downloaders import DownloadTimeoutError
+from .downloaders import DownloadTimeoutError, DownloadTooLargeError
 from .i18n import t
 
 # Substrings that mean login / age-gate / cookies rather than a bot bug.
@@ -52,6 +52,8 @@ def format_download_error(error: BaseException | str, *, context: str | None = N
     """
     if isinstance(error, DownloadTimeoutError):
         return t("errors.download_timeout")
+    if isinstance(error, DownloadTooLargeError):
+        return t("errors.download_too_large")
     if is_access_restricted_error(error):
         return t("errors.download_unavailable")
     detail = str(error)

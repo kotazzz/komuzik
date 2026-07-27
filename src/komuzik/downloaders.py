@@ -565,19 +565,51 @@ async def _ensure_telegram_ios_video(file_path: str) -> tuple[str, dict[str, Any
 
 
 def _get_expected_size(info: Mapping[str, Any]) -> int:
-    """Get an expected file size from yt-dlp metadata if available."""
+    """Best-effort expected download size from yt-dlp metadata.
+
+    Root-level ``filesize`` / ``filesize_approx`` are usually missing for YouTube
+    when video and audio are separate streams. Summing ``requested_formats``
+    (populated after format selection) is what actually predicts the download.
+    """
     for key in ("filesize", "filesize_approx"):
         size = info.get(key)
         if isinstance(size, int) and size > 0:
             return size
+
+    requested = info.get("requested_formats")
+    if isinstance(requested, list) and requested:
+        total = 0
+        found = False
+        for fmt in requested:
+            if not isinstance(fmt, Mapping):
+                continue
+            for key in ("filesize", "filesize_approx"):
+                size = fmt.get(key)
+                if isinstance(size, int) and size > 0:
+                    total += size
+                    found = True
+                    break
+        if found:
+            return total
     return 0
+
+
+def _size_limit_opts() -> dict[str, int]:
+    """yt-dlp opts that abort a download whose reported size exceeds the cap.
+
+    This is the only pre-download hard stop that works when metadata has no
+    filesize: yt-dlp checks ``max_filesize`` against each format as it starts
+    writing, so a 2 GB file is not fully pulled just to be rejected afterward.
+    """
+    return {"max_filesize": MAX_DOWNLOAD_SIZE_BYTES}
 
 
 def _ensure_size_within_limit(size_bytes: int, label: str):
     """Reject downloads that exceed the configured size limit."""
     if size_bytes and size_bytes > MAX_DOWNLOAD_SIZE_BYTES:
         raise DownloadTooLargeError(
-            f"{label} exceeds the maximum allowed size of {MAX_DOWNLOAD_SIZE_BYTES // (1024 * 1024 * 1024)} GB"
+            f"{label} exceeds the maximum allowed size of "
+            f"{MAX_DOWNLOAD_SIZE_BYTES // (1024 * 1024 * 1024)} GB"
         )
 
 
@@ -585,6 +617,21 @@ def _ensure_file_within_limit(file_path: str, label: str):
     """Reject files that exceed the configured size limit after download."""
     file_size = Path(file_path).stat().st_size
     _ensure_size_within_limit(file_size, label)
+
+
+def _is_max_filesize_error(error: BaseException) -> bool:
+    text = str(error).lower()
+    return "max-filesize" in text or "larger than max" in text
+
+
+def _reraise_size_limit(error: BaseException, label: str) -> None:
+    """Translate yt-dlp's max-filesize abort into DownloadTooLargeError."""
+    if _is_max_filesize_error(error):
+        raise DownloadTooLargeError(
+            f"{label} exceeds the maximum allowed size of "
+            f"{MAX_DOWNLOAD_SIZE_BYTES // (1024 * 1024 * 1024)} GB"
+        ) from error
+    raise error
 
 
 async def _download_content(
@@ -605,21 +652,14 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
     cleanup_on_error = True
 
     try:
-        # Get info first
-        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
-            info = cast(
-                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
-            )
-
-        _ensure_size_within_limit(_get_expected_size(info), "YouTube video")
-
-        video_id = info.get("id", "")
+        video_id_placeholder = "%(id)s"
         format_option = _build_video_format(quality)
 
         ydl_opts = {
             **YDLP_BASE_OPTS,
+            **_size_limit_opts(),
             "format": format_option,
-            "outtmpl": f"{temp_dir}/{video_id}.%(ext)s",
+            "outtmpl": f"{temp_dir}/{video_id_placeholder}.%(ext)s",
             "postprocessors": [
                 {
                     "key": "FFmpegVideoConvertor",
@@ -633,8 +673,17 @@ async def download_youtube_video(url: str, quality: str = "best") -> tuple[str, 
             },
         }
 
+        # One extract with the real format string so requested_formats (and their
+        # filesizes) are known before any bytes are written.
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-            await run_download(ydl.download, [url])
+            try:
+                info = cast(
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
+                )
+                _ensure_size_within_limit(_get_expected_size(info), "YouTube video")
+                await run_download(ydl.download, [url])
+            except DownloadError as e:
+                _reraise_size_limit(e, "YouTube video")
 
         # Find the downloaded file
         file_path = _find_downloaded_file(temp_dir, expected_extension="mp4")
@@ -662,25 +711,13 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
     cleanup_on_error = True
 
     try:
-        # Get info first
-        with yt_dlp.YoutubeDL(cast("Any", YDLP_BASE_OPTS)) as ydl:
-            info = cast(
-                "dict[str, Any]", await run_download(ydl.extract_info, url, False)
-            )
-
-        _ensure_size_within_limit(_get_expected_size(info), "YouTube audio")
-
-        video_id = info.get("id", "")
-        title_value = info.get("title")
-        title = title_value if isinstance(title_value, str) else "Unknown"
-        artist, track = _extract_metadata(info, title)
-
         format_option = AUDIO_QUALITY_SETTINGS.get(quality, AUDIO_QUALITY_SETTINGS["high"])
 
         ydl_opts = {
             **YDLP_BASE_OPTS,
+            **_size_limit_opts(),
             "format": format_option,
-            "outtmpl": f"{temp_dir}/{video_id}.%(ext)s",
+            "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -694,9 +731,19 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
         }
 
         with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
-            await run_download(ydl.download, [url])
+            try:
+                info = cast(
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
+                )
+                _ensure_size_within_limit(_get_expected_size(info), "YouTube audio")
+                await run_download(ydl.download, [url])
+            except DownloadError as e:
+                _reraise_size_limit(e, "YouTube audio")
 
-        # Find the downloaded audio file
+        title_value = info.get("title")
+        title = title_value if isinstance(title_value, str) else "Unknown"
+        artist, track = _extract_metadata(info, title)
+
         file_path = _find_downloaded_file(temp_dir, AUDIO_FORMAT)
         _ensure_file_within_limit(file_path, "YouTube audio")
 
@@ -739,6 +786,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
         try:
             ydl_opts = {
                 **YDLP_BASE_OPTS,
+                **_size_limit_opts(),
                 "format": "best",
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
@@ -769,6 +817,10 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 shutil.rmtree(temp_dir)
             raise
         except DownloadError as e:
+            if _is_max_filesize_error(e):
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                _reraise_size_limit(e, "TikTok video")
             error_msg = str(e)
             last_error = e
 
@@ -828,6 +880,7 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
         try:
             ydl_opts = {
                 **YDLP_BASE_OPTS,
+                **_size_limit_opts(),
                 "format": "best",
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
@@ -855,6 +908,10 @@ async def download_hls_host_video(url: str, max_retries: int | None = None) -> t
                 shutil.rmtree(temp_dir)
             raise
         except DownloadError as e:
+            if _is_max_filesize_error(e):
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                _reraise_size_limit(e, "video")
             last_error = e
             if attempt < retries - 1:
                 _clear_temp_dir(temp_dir)
@@ -1227,6 +1284,7 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
         try:
             ydl_opts = {
                 **YDLP_BASE_OPTS,
+                **_size_limit_opts(),
                 "format": "best",
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
@@ -1265,6 +1323,10 @@ async def download_twitter_video(url: str, max_retries: int | None = None) -> tu
                 shutil.rmtree(temp_dir)
             raise
         except DownloadError as e:
+            if _is_max_filesize_error(e):
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                _reraise_size_limit(e, "Twitter content")
             error_msg = str(e)
             last_error = e
 
@@ -1340,6 +1402,7 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
         try:
             ydl_opts = {
                 **YDLP_BASE_OPTS,
+                **_size_limit_opts(),
                 "format": "best",
                 "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
             }
@@ -1376,6 +1439,10 @@ async def download_pinterest_content(url: str, max_retries: int | None = None) -
                 shutil.rmtree(temp_dir)
             raise
         except DownloadError as e:
+            if _is_max_filesize_error(e):
+                if cleanup_on_error and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                _reraise_size_limit(e, "Pinterest content")
             error_msg = str(e)
             last_error = e
 
