@@ -19,6 +19,7 @@ from ..downloaders import (
     download_youtube_video,
     search_youtube,
 )
+from ..i18n import t
 from ..inline_media import (
     PM_UNAVAILABLE_MESSAGE,
     delete_staging_message,
@@ -30,7 +31,7 @@ from ..inline_media import (
 from ..inline_query import ParsedInlineQuery, parse_inline_query
 from ..storage import delete_staging, stage_media
 from ..user_errors import format_download_error
-from .common import INLINE_JOBS, INLINE_SEARCH_MAX, format_ban_message, media_title
+from .common import INLINE_JOBS, INLINE_SEARCH_MAX, _entity_display_name, format_ban_message, media_title
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class InlineMixin:
                 if reason is not None:
                     builder = event.builder
                     blocked = await builder.article(
-                        title="🚫 Доступ ограничен",
+                        title=t("inline.access_restricted"),
                         description=reason[:64],
                         text=format_ban_message(reason),
                         id="banned",
@@ -89,7 +90,7 @@ class InlineMixin:
                 result = await builder.article(
                     title=parsed.description[:64],
                     description=(parsed.url[:64] if parsed.url else parsed.description),
-                    text="⏳ Загрузка…",
+                    text=t("common.loading"),
                     buttons=[Button.inline("⏳", b"noop")],
                     id=token,
                 )
@@ -102,14 +103,9 @@ class InlineMixin:
             query = query_text.strip()
             if not query:
                 hint = await builder.article(
-                    title="Ссылка или поисковый запрос",
-                    description="YouTube / TikTok / X / Pinterest · или текст поиска",
-                    text=(
-                        "После @бота укажите ссылку или текст для поиска на YouTube.\n"
-                        "Ссылка: `music` / `480` + URL. Поиск: просто слова.\n"
-                        "Превью картинками — только в ЛС через /search.\n"
-                        "Сначала напишите боту /start в ЛС."
-                    ),
+                    title=t("inline.hint_title"),
+                    description=t("inline.hint_description"),
+                    text=t("inline.hint_text"),
                     buttons=[Button.inline("⏳", b"noop")],
                     id="hint",
                 )
@@ -119,9 +115,9 @@ class InlineMixin:
             # Too-short queries: don't hit YouTube on every keystroke
             if len(query) < 3:
                 hint = await builder.article(
-                    title="Продолжите ввод…",
-                    description="Нужно минимум 3 символа для поиска",
-                    text="Введите ещё символы или вставьте ссылку.",
+                    title=t("inline.short_title"),
+                    description=t("inline.short_description"),
+                    text=t("inline.short_text"),
                     id="hint_short",
                 )
                 await self._safe_inline_answer(event, [hint])
@@ -144,9 +140,9 @@ class InlineMixin:
             except TimeoutError:
                 logger.warning(f"Inline search timeout query={query!r}")
                 slow = await builder.article(
-                    title="Поиск не успел",
-                    description="Напишите /search в ЛС",
-                    text="YouTube отвечает медленно для inline. Используйте /search в личке.",
+                    title=t("inline.timeout_title"),
+                    description=t("inline.timeout_description"),
+                    text=t("inline.timeout_text"),
                     id="search_timeout",
                 )
                 await self._safe_inline_answer(event, [slow])
@@ -154,9 +150,9 @@ class InlineMixin:
 
             if not results:
                 empty = await builder.article(
-                    title="Ничего не найдено",
-                    description="Попробуйте другой запрос",
-                    text="По этому запросу ничего не нашлось.",
+                    title=t("inline.empty_title"),
+                    description=t("inline.empty_description"),
+                    text=t("inline.empty_text"),
                     id="search_empty",
                 )
                 await self._safe_inline_answer(event, [empty])
@@ -171,7 +167,7 @@ class InlineMixin:
                 token = uuid.uuid4().hex[:16]
                 INLINE_JOBS[token] = job
 
-                title = str(item.get("title") or "Без названия")
+                title = str(item.get("title") or t("common.untitled"))
                 if len(title) > 64:
                     title = title[:61] + "..."
 
@@ -188,7 +184,7 @@ class InlineMixin:
                     await builder.article(
                         title=title,
                         description=description,
-                        text="⏳ Загрузка…",
+                        text=t("common.loading"),
                         buttons=[Button.inline("⏳", b"noop")],
                         id=token,
                     )
@@ -196,9 +192,9 @@ class InlineMixin:
 
             if not articles:
                 empty = await builder.article(
-                    title="Ничего не найдено",
-                    description="Попробуйте другой запрос",
-                    text="По этому запросу ничего не нашлось.",
+                    title=t("inline.empty_title"),
+                    description=t("inline.empty_description"),
+                    text=t("inline.empty_text"),
                     id="search_empty",
                 )
                 await self._safe_inline_answer(event, [empty])
@@ -215,9 +211,9 @@ class InlineMixin:
             logger.exception(f"Inline handler crashed text={query_text!r}")
             try:
                 fail = await event.builder.article(
-                    title="Ошибка inline",
-                    description="Попробуйте /search в ЛС",
-                    text="Не удалось обработать inline-запрос.",
+                    title=t("inline.error_title"),
+                    description=t("inline.error_description"),
+                    text=t("inline.error_text"),
                     id="inline_crash",
                 )
                 await self._safe_inline_answer(event, [fail])
@@ -265,14 +261,17 @@ class InlineMixin:
             await edit_inline_text(
                 self.client,
                 inline_msg_id,
-                f"⚠️ Уже есть активная загрузка ({active_count}/"
-                f"{self.download_limiter.MAX_DOWNLOADS_PER_USER}). Подождите.",
+                t(
+                    "download.active_limit_short",
+                    active=active_count,
+                    max=self.download_limiter.MAX_DOWNLOADS_PER_USER,
+                ),
             )
             return
 
         file_path = None
         try:
-            await edit_inline_text(self.client, inline_msg_id, "⏳ Загрузка…")
+            await edit_inline_text(self.client, inline_msg_id, t("common.loading"))
             file_path, metadata, media_kind = await self._download_for_inline(parsed)
             storage_chat_id = self.stats.get_storage_chat_id()
             if storage_chat_id is not None:
@@ -328,7 +327,7 @@ class InlineMixin:
                 await edit_inline_text(
                     self.client,
                     inline_msg_id,
-                    format_download_error(e, context="❌ Не удалось загрузить:"),
+                    format_download_error(e, context=t("download.failed_context")),
                 )
             except Exception as edit_error:
                 logger.error(f"Failed to edit inline error text: {edit_error}")

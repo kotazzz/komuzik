@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..broadcast import BroadcastControl
+from ..i18n import t
 from ..inline_query import ParsedInlineQuery
 from ..playlist import PlaylistSession
 from ..state import TTLCache
@@ -51,11 +52,7 @@ CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
 def format_ban_message(reason: str) -> str:
-    return (
-        "🚫 Вы заблокированы.\n"
-        f"Причина: {reason}\n"
-        "Если ошибка — /report"
-    )
+    return t("ban.message", reason=reason)
 
 
 def _sender_display_name(sender) -> str | None:

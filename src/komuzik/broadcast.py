@@ -17,6 +17,8 @@ from telethon.errors import (
     UserPrivacyRestrictedError,
 )
 
+from .i18n import t
+
 logger = logging.getLogger(__name__)
 
 # Permanent delivery failures — skip the recipient, keep going.
@@ -157,27 +159,33 @@ async def broadcast_messages(
 def format_broadcast_progress(result: BroadcastResult) -> str:
     """Human-readable status line for the admin progress message."""
     done = result.sent + result.failed
-    line = f"📢 Рассылка: {done}/{result.total} (✅ {result.sent} · ⚠️ {result.failed})"
+    line = t(
+        "admin.broadcast.progress",
+        done=done,
+        total=result.total,
+        sent=result.sent,
+        failed=result.failed,
+    )
     if result.flood_waits:
-        line += f" · ⏳ FloodWait×{result.flood_waits}"
+        line += t("admin.broadcast.progress_flood", count=result.flood_waits)
     return line
 
 
 def format_broadcast_result(result: BroadcastResult) -> str:
     """Final summary shown when the broadcast finishes."""
     if result.cancelled:
-        head = "⏹ Рассылка остановлена"
+        head = t("admin.broadcast.cancelled")
     elif result.aborted_by_flood:
-        head = "🛑 Рассылка прервана (PeerFlood)"
+        head = t("admin.broadcast.aborted_flood")
     else:
-        head = "✅ Рассылка завершена"
+        head = t("admin.broadcast.finished")
 
     lines = [
         head,
-        f"Отправлено: {result.sent}/{result.total}",
+        t("admin.broadcast.sent", sent=result.sent, total=result.total),
     ]
     if result.failed:
-        lines.append(f"Не удалось: {result.failed}")
+        lines.append(t("admin.broadcast.failed", failed=result.failed))
     if result.flood_waits:
-        lines.append(f"FloodWait: {result.flood_waits}")
+        lines.append(t("admin.broadcast.flood_waits", count=result.flood_waits))
     return "\n".join(lines)

@@ -12,6 +12,7 @@ from ..downloaders import (
     download_youtube_video,
     send_playlist_album,
 )
+from ..i18n import t
 from ..playlist import (
     PLAYLIST_BATCH_SIZE,
     PLAYLIST_PAGE_SIZE,
@@ -43,12 +44,12 @@ class PlaylistMixin:
             rows.append(nav)
         rows.append(
             [
-                Button.inline("🎬 Видео", data="pl_video"),
-                Button.inline("🎵 Аудио", data="pl_audio"),
+                Button.inline(t("playlist.buttons.video"), data="pl_video"),
+                Button.inline(t("playlist.buttons.audio"), data="pl_audio"),
             ]
         )
         rows.append(
-            [Button.inline(f"✅ Скачать выбранное ({selected})", data="pl_hint")]
+            [Button.inline(t("playlist.buttons.download_selected", count=selected), data="pl_hint")]
         )
         return rows
 
@@ -56,12 +57,12 @@ class PlaylistMixin:
         self, event: Message, user_id: int, url: str, is_music: bool
     ) -> None:
         """Load playlist and show first preview page."""
-        status = await event.respond("📃 Читаю плейлист…")
+        status = await event.respond(t("playlist.reading"))
         try:
             title, entries, truncated = await extract_playlist(url, is_music=is_music)
         except Exception as e:
             logger.error(f"Playlist extract failed: {e}")
-            await event.respond(f"❌ Не удалось открыть плейлист: {e!s}")
+            await event.respond(t("playlist.open_failed", error=str(e)))
             try:
                 await status.delete()
             except Exception:
@@ -69,7 +70,7 @@ class PlaylistMixin:
             return
 
         if not entries:
-            await event.respond("Плейлист пуст или недоступен.")
+            await event.respond(t("playlist.empty"))
             try:
                 await status.delete()
             except Exception:
@@ -121,13 +122,7 @@ class PlaylistMixin:
         new_excluded = parse_exclusion_ops(text, len(session.entries), session.excluded)
         if new_excluded is None:
             await event.respond(
-                "Не понял команду.\n\n"
-                "Ответьте **reply** на превью плейлиста, например:\n"
-                "• `-5` — убрать 5-й\n"
-                "• `-1,3,8` — убрать несколько\n"
-                "• `-1-20` — убрать диапазон\n"
-                "• `+5` — вернуть 5-й\n"
-                "• `+11,13,15` — вернуть несколько",
+                t("playlist.exclusion_help"),
                 reply_to=session.preview_msg_id,
             )
             return True
@@ -165,20 +160,16 @@ class PlaylistMixin:
             return
         session = PLAYLIST_STATES.get(user_id)
         if session is None:
-            await event.answer("Сессия плейлиста истекла. Пришлите ссылку снова.", alert=True)
+            await event.answer(t("playlist.session_expired"), alert=True)
             return
 
         if data == "pl_hint":
-            await event.answer(
-                "Сначала Видео или Аудио → качество. "
-                "Чтобы убрать треки — reply на превью (см. инструкцию в сообщении).",
-                alert=True,
-            )
+            await event.answer(t("playlist.hint"), alert=True)
             return
 
         if data == "pl_stop":
             session.cancel_requested = True
-            await event.answer("⏹ Останавливаю… дошлю уже скачанное.")
+            await event.answer(t("playlist.stopping"))
             return
 
         if data == "pl_prev":
@@ -206,12 +197,14 @@ class PlaylistMixin:
                     Button.inline("720p", data="pl_vq_720p"),
                     Button.inline("1080p", data="pl_vq_1080p"),
                 ],
-                [Button.inline("← Назад", data="pl_back")],
+                [Button.inline(t("common.back"), data="pl_back")],
             ]
             await event.edit(
-                f"📃 **{session.title}**\n\n"
-                f"К загрузке: **{len(selected_entries(session))}**\n"
-                "Выберите качество видео для всего плейлиста:",
+                t(
+                    "playlist.quality_video",
+                    title=session.title,
+                    count=len(selected_entries(session)),
+                ),
                 buttons=buttons,
             )
             await event.answer()
@@ -220,16 +213,18 @@ class PlaylistMixin:
         if data == "pl_audio":
             buttons = [
                 [
-                    Button.inline("Высокое", data="pl_aq_high"),
-                    Button.inline("Среднее", data="pl_aq_medium"),
+                    Button.inline(t("playlist.buttons.quality_high"), data="pl_aq_high"),
+                    Button.inline(t("playlist.buttons.quality_medium"), data="pl_aq_medium"),
                 ],
-                [Button.inline("Низкое", data="pl_aq_low")],
-                [Button.inline("← Назад", data="pl_back")],
+                [Button.inline(t("playlist.buttons.quality_low"), data="pl_aq_low")],
+                [Button.inline(t("common.back"), data="pl_back")],
             ]
             await event.edit(
-                f"📃 **{session.title}**\n\n"
-                f"К загрузке: **{len(selected_entries(session))}**\n"
-                "Выберите качество аудио для всего плейлиста:",
+                t(
+                    "playlist.quality_audio",
+                    title=session.title,
+                    count=len(selected_entries(session)),
+                ),
                 buttons=buttons,
             )
             await event.answer()
@@ -242,13 +237,13 @@ class PlaylistMixin:
 
         if data.startswith("pl_vq_"):
             quality = data.removeprefix("pl_vq_")
-            await event.answer(f"Качаю видео {quality}…")
+            await event.answer(t("playlist.downloading_video", quality=quality))
             await self._download_playlist(event, session, mode="video", quality=quality)
             return
 
         if data.startswith("pl_aq_"):
             quality = data.removeprefix("pl_aq_")
-            await event.answer(f"Качаю аудио {quality}…")
+            await event.answer(t("playlist.downloading_audio", quality=quality))
             await self._download_playlist(event, session, mode="audio", quality=quality)
             return
 
@@ -268,7 +263,7 @@ class PlaylistMixin:
 
         entries = selected_entries(session)
         if not entries:
-            await event.edit("Нечего скачивать — всё исключено.")
+            await event.edit(t("playlist.nothing_to_download"))
             return
 
         is_admin = user_id in self.download_limiter.ADMIN_USER_IDS
@@ -278,8 +273,11 @@ class PlaylistMixin:
         )
         if remaining is not None and len(entries) > remaining:
             await event.edit(
-                f"⚠️ Выбрано {len(entries)}, доступно {remaining} до конца дня (МСК). "
-                "Уменьши выбор (исключения) или подожди завтра."
+                t(
+                    "playlist.quota_exceeded",
+                    selected=len(entries),
+                    remaining=remaining,
+                )
             )
             return
 
@@ -294,7 +292,7 @@ class PlaylistMixin:
         fail = 0
         sent = 0
         caption_kw = self._caption_kwargs(user_id)
-        stop_btn = [[Button.inline("⏹ Стоп", data="pl_stop")]]
+        stop_btn = [[Button.inline(t("common.stop"), data="pl_stop")]]
 
         def quota_status() -> str:
             if is_admin or is_unlimited:
@@ -305,7 +303,7 @@ class PlaylistMixin:
             if limit is None:
                 return ""
             used = self.stats.get_playlist_usage(user_id)
-            return f" · лимит: {used}/{limit}"
+            return t("playlist.quota_suffix", used=used, limit=limit)
 
         async def update_progress(text: str) -> None:
             try:
@@ -317,10 +315,14 @@ class PlaylistMixin:
                     pass
 
         await update_progress(
-            f"⏳ Плейлист **{session.title}**\n"
-            f"Готово: **0/{total}** · отправлено: 0{quota_status()}\n"
-            f"Режим: {mode} {quality}\n\n"
-            "Начинаю…"
+            t(
+                "playlist.progress_start",
+                title=session.title,
+                total=total,
+                quota=quota_status(),
+                mode=mode,
+                quality=quality,
+            )
         )
 
         batch: list[tuple[str, dict]] = []
@@ -389,7 +391,9 @@ class PlaylistMixin:
                 except Exception as e:
                     logger.error(f"Playlist batch send failed: {e}")
                     try:
-                        await event.respond(f"⚠️ Не удалось отправить пачку ({len(batch)}): {e!s}")
+                        await event.respond(
+                            t("playlist.batch_send_failed", count=len(batch), error=str(e))
+                        )
                     except Exception:
                         pass
                 finally:
@@ -417,7 +421,9 @@ class PlaylistMixin:
             except Exception as e:
                 logger.error(f"Playlist batch send failed: {e}")
                 try:
-                    await event.respond(f"⚠️ Не удалось отправить пачку ({len(batch)}): {e!s}")
+                    await event.respond(
+                        t("playlist.batch_send_failed", count=len(batch), error=str(e))
+                    )
                 except Exception:
                     pass
             finally:
@@ -433,11 +439,20 @@ class PlaylistMixin:
 
                 safe_title = entry.title.replace("[", "(").replace("]", ")")[:70]
                 await update_progress(
-                    f"⏳ Плейлист **{session.title}**\n"
-                    f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
-                    f"Режим: {mode} {quality}\n\n"
-                    f"Сейчас: [{safe_title}]({entry.url})\n"
-                    f"({i}/{total})"
+                    t(
+                        "playlist.progress_current",
+                        title=session.title,
+                        done=done,
+                        total=total,
+                        sent=sent,
+                        fail=fail,
+                        quota=quota_status(),
+                        mode=mode,
+                        quality=quality,
+                        item_title=safe_title,
+                        url=entry.url,
+                        index=i,
+                    )
                 )
 
                 file_path = None
@@ -470,11 +485,21 @@ class PlaylistMixin:
                     file_path = None
 
                     await update_progress(
-                        f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
-                        f"Режим: {mode} {quality}\n\n"
-                        f"✅ Скачан: [{safe_title}]({entry.url})\n"
-                        f"В пачке: {len(batch)}/{PLAYLIST_BATCH_SIZE}"
+                        t(
+                            "playlist.progress_downloaded",
+                            title=session.title,
+                            done=done,
+                            total=total,
+                            sent=sent,
+                            fail=fail,
+                            quota=quota_status(),
+                            mode=mode,
+                            quality=quality,
+                            item_title=safe_title,
+                            url=entry.url,
+                            batch_size=len(batch),
+                            batch_max=PLAYLIST_BATCH_SIZE,
+                        )
                     )
                 except Exception as e:
                     fail += 1
@@ -504,7 +529,13 @@ class PlaylistMixin:
                         )
                     try:
                         await event.respond(
-                            f"⚠️ Пропуск {i}/{total}: {entry.title[:60]} — {e!s}"
+                            t(
+                                "playlist.skip_item",
+                                index=i,
+                                total=total,
+                                title=entry.title[:60],
+                                error=str(e),
+                            )
                         )
                     except Exception:
                         pass
@@ -514,19 +545,32 @@ class PlaylistMixin:
 
                 if len(batch) >= PLAYLIST_BATCH_SIZE:
                     batch_progress = (
-                        f"отправляю пачку {len(batch)} из хранилища…"
+                        t("playlist.batch_from_storage", count=len(batch))
                         if use_storage
-                        else f"отправляю пачку {len(batch)}…"
+                        else t("playlist.batch_sending", count=len(batch))
                     )
                     await update_progress(
-                        f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · {batch_progress}"
+                        t(
+                            "playlist.progress_batch",
+                            title=session.title,
+                            done=done,
+                            total=total,
+                            batch_progress=batch_progress,
+                        )
                     )
                     await flush_batch()
                     await update_progress(
-                        f"⏳ Плейлист **{session.title}**\n"
-                        f"Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota_status()}\n"
-                        f"Режим: {mode} {quality}"
+                        t(
+                            "playlist.progress_after_batch",
+                            title=session.title,
+                            done=done,
+                            total=total,
+                            sent=sent,
+                            fail=fail,
+                            quota=quota_status(),
+                            mode=mode,
+                            quality=quality,
+                        )
                     )
 
                 if session.cancel_requested:
@@ -535,25 +579,33 @@ class PlaylistMixin:
 
             if batch:
                 remainder_progress = (
-                    f"отправляю остаток ({len(batch)}) из хранилища…"
+                    t("playlist.remainder_from_storage", count=len(batch))
                     if use_storage
-                    else f"отправляю остаток ({len(batch)})…"
+                    else t("playlist.remainder_sending", count=len(batch))
                 )
                 await update_progress(
-                    f"⏳ Плейлист **{session.title}**\n"
-                    f"Готово: **{done}/{total}** · {remainder_progress}"
+                    t(
+                        "playlist.progress_batch",
+                        title=session.title,
+                        done=done,
+                        total=total,
+                        batch_progress=remainder_progress,
+                    )
                 )
                 await flush_batch()
 
             if cancelled:
-                summary = (
-                    f"⏹ Остановлено.\n"
-                    f"Скачано: {done}/{total} · отправлено: {sent} · ошибок: {fail}"
+                summary = t(
+                    "playlist.cancelled_summary",
+                    done=done,
+                    total=total,
+                    sent=sent,
+                    fail=fail,
                 )
             else:
-                summary = f"✅ Плейлист готов: отправлено {sent}/{total}"
+                summary = t("playlist.done_summary", sent=sent, total=total)
                 if fail:
-                    summary += f" (ошибок: {fail})"
+                    summary += t("playlist.done_with_errors", fail=fail)
             try:
                 await event.edit(summary)
             except Exception:

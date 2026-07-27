@@ -18,6 +18,7 @@ from telethon.tl.custom import Message
 
 from ..download_limiter import DownloadLimiter
 from ..downloaders import DownloadTimeoutError, send_audio_content, send_image_content, send_video_content
+from ..i18n import t
 from ..repository import StatsRepository
 from ..user_errors import format_download_error
 from .common import CALLBACK_URLS, media_title
@@ -229,8 +230,11 @@ class BotHandlersBase:
         if not await self.download_limiter.start_download(user_id, download_id):
             active_count = self.download_limiter.get_active_count(user_id)
             await event.respond(
-                f"⚠️ У вас уже есть активная загрузка ({active_count}/{self.download_limiter.MAX_DOWNLOADS_PER_USER}). "
-                f"Пожалуйста, дождитесь завершения текущей загрузки."
+                t(
+                    "download.active_limit",
+                    active=active_count,
+                    max=self.download_limiter.MAX_DOWNLOADS_PER_USER,
+                )
             )
             return False
         return True
@@ -265,7 +269,7 @@ class BotHandlersBase:
         try:
             client = event.client
             if client is None:
-                await event.respond("Произошла ошибка: клиент Telegram недоступен.")
+                await event.respond(t("common.telegram_client_unavailable"))
                 return
 
             async with client.action(event.chat_id, action):

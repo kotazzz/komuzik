@@ -11,6 +11,7 @@ import yt_dlp
 
 from .config import YDLP_BASE_OPTS
 from .executors import run_download
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,7 @@ class PlaylistSession:
     downloading: bool = False
 
 
-EXCLUSION_HELP = (
-    "**Как убрать треки из загрузки**\n"
-    "Ответьте **reply** на это сообщение текстом:\n\n"
-    "• `-5` — не качать 5-й трек\n"
-    "• `-1,3,8` — не качать 1, 3 и 8\n"
-    "• `-1-20` — не качать с 1 по 20 включительно\n"
-    "• `-1-10,15,20-30` — диапазоны и отдельные номера\n"
-    "• `+5` — вернуть 5-й обратно в загрузку\n"
-    "• `+11,13,15` — вернуть 11, 13 и 15\n\n"
-    "Номера — как в списке ниже. Можно несколько раз подряд."
-)
+EXCLUSION_HELP = t("playlist.preview.exclusion_help")
 
 
 def find_playlist_url(text: str) -> tuple[str, bool] | None:
@@ -187,9 +178,9 @@ async def extract_playlist(url: str, *, is_music: bool) -> tuple[str, list[Playl
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         if not isinstance(info, dict):
-            raise ValueError("Не удалось прочитать плейлист")
+            raise ValueError(t("playlist.preview.read_failed"))
 
-        title = str(info.get("title") or "Плейлист")
+        title = str(info.get("title") or t("playlist.preview.default_title"))
         raw_entries = list(info.get("entries") or [])
         entries: list[PlaylistEntry] = []
         for item in raw_entries:
@@ -235,10 +226,16 @@ def format_preview_page(session: PlaylistSession) -> str:
 
     lines = [
         f"📃 **{session.title}**",
-        f"Треков: {total} · к загрузке: **{selected}** · стр. {page + 1}/{pages}",
+        t(
+            "playlist.preview.stats",
+            total=total,
+            selected=selected,
+            page=page + 1,
+            pages=pages,
+        ),
     ]
     if session.truncated:
-        lines.append(f"⚠️ Показаны первые {PLAYLIST_MAX_ENTRIES} треков.")
+        lines.append(t("playlist.preview.truncated", max=PLAYLIST_MAX_ENTRIES))
     lines.append("")
     lines.append(EXCLUSION_HELP)
     lines.append("")

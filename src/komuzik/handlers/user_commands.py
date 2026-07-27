@@ -118,11 +118,9 @@ class UserCommandsMixin:
         concurrent_cap = self.download_limiter.get_max_per_user()
 
         if unlimited_concurrent:
-            concurrent_line = f"Одновременные загрузки: **{active}** активных · без лимита"
+            concurrent_line = t("limits.concurrent_unlimited", active=active)
         else:
-            concurrent_line = (
-                f"Одновременные загрузки: **{active}/{concurrent_cap}** активных"
-            )
+            concurrent_line = t("limits.concurrent", active=active, cap=concurrent_cap)
 
         playlist_limit = self.stats.effective_playlist_limit(
             user_id,
@@ -133,20 +131,28 @@ class UserCommandsMixin:
         personal = self.stats.get_user_playlist_limit(user_id)
 
         if playlist_limit is None:
-            playlist_line = "Плейлист / сутки (МСК): без лимита"
+            playlist_line = t("limits.playlist_unlimited")
         else:
             remaining = max(0, playlist_limit - used)
-            source = "персональный" if personal is not None else "общий"
-            playlist_line = (
-                f"Плейлист / сутки (МСК): **{used}/{playlist_limit}** "
-                f"(осталось {remaining}, {source})"
+            source = (
+                t("limits.source_personal")
+                if personal is not None
+                else t("limits.source_global")
+            )
+            playlist_line = t(
+                "limits.playlist",
+                used=used,
+                limit=playlist_limit,
+                remaining=remaining,
+                source=source,
             )
 
         return (
-            "📊 **Ваши лимиты**\n\n"
-            f"{concurrent_line}\n"
-            f"{playlist_line}\n\n"
-            "Суточный лимит плейлиста обновляется в полночь по Москве."
+            t("limits.header")
+            + "\n\n"
+            + f"{concurrent_line}\n"
+            + f"{playlist_line}\n\n"
+            + t("limits.footer")
         )
 
     async def limits_handler(self, event: Message):
@@ -186,7 +192,7 @@ class UserCommandsMixin:
 
         if bool(getattr(event, "is_group", False)):
             if not await self._is_chat_admin(event):
-                await event.respond("❌ Только администраторы могут менять настройки чата.")
+                await event.respond(t("settings.chat_admin_only"))
                 return
             chat_id = int(event.chat_id)
             settings = self.stats.get_chat_settings(chat_id)
@@ -215,49 +221,44 @@ class UserCommandsMixin:
             return False
 
     def _format_settings_message(self, settings) -> str:
-        bot_state = "✅ Вкл" if settings.show_bot_caption else "❌ Выкл"
-        title_state = "✅ Вкл" if settings.show_title else "❌ Выкл"
+        bot_state = t("common.on") if settings.show_bot_caption else t("common.off")
+        title_state = t("common.on") if settings.show_title else t("common.off")
         return (
-            "⚙️ **Личные настройки**\n\n"
-            f"🤖 Подпись бота (@{self.bot_username or 'bot'}): {bot_state}\n"
-            f"📝 Название видео: {title_state}\n"
-            f"📺 Качество (инлайн): **{settings.default_quality}**\n\n"
-            "Качество влияет на инлайн без префикса. "
-            "В ЛС по ссылке выбор формата как раньше."
+            t("settings.personal_header")
+            + "\n\n"
+            + t(
+                "settings.personal_body",
+                bot_username=self.bot_username or "bot",
+                bot_state=bot_state,
+                title_state=title_state,
+                quality=settings.default_quality,
+            )
         )
 
     def _settings_buttons(self, settings):
         bot_label = (
-            "🤖 Подпись бота: выключить"
+            t("settings.buttons.bot_off")
             if settings.show_bot_caption
-            else "🤖 Подпись бота: включить"
+            else t("settings.buttons.bot_on")
         )
-        title_label = "📝 Название: выключить" if settings.show_title else "📝 Название: включить"
+        title_label = (
+            t("settings.buttons.title_off")
+            if settings.show_title
+            else t("settings.buttons.title_on")
+        )
         return [
             [Button.inline(bot_label, data="settings_bot")],
             [Button.inline(title_label, data="settings_title")],
-            [Button.inline("📺 Качество по умолчанию", data="settings_quality")],
+            [Button.inline(t("settings.buttons.default_quality"), data="settings_quality")],
         ]
 
     def _format_quality_settings_message(self, current_quality: str, *, scope: str) -> str:
-        scope_line = (
-            "для **инлайна** (личные настройки)"
+        header = (
+            t("settings.quality_header_user")
             if scope == "user"
-            else "для **этой группы** (автозагрузка)"
+            else t("settings.quality_header_chat")
         )
-        return (
-            f"📺 **Качество по умолчанию** {scope_line}\n\n"
-            "Сейчас: **"
-            f"{current_quality}**\n\n"
-            "Ориентир размера (ролик ~3–5 мин):\n"
-            "• 360p — ~5–15 МБ\n"
-            "• 480p — ~15–30 МБ\n"
-            "• 720p — ~30–60 МБ\n"
-            "• 1080p — ~60–120+ МБ\n\n"
-            "⚠️ Не ставьте высокое качество без нужды — "
-            "файлы быстро забивают память телефона.\n\n"
-            "Префикс в запросе (`480`, `music`…) всегда важнее этого дефолта."
-        )
+        return header + "\n\n" + t("settings.quality_body", quality=current_quality)
 
     def _quality_settings_buttons(self, current_quality: str, *, prefix: str) -> list:
         """Build quality picker. prefix is 'settings_q_' or 'chatset_q_'."""
@@ -272,23 +273,26 @@ class UserCommandsMixin:
         if row:
             buttons.append(row)
         back = "settings_back" if prefix.startswith("settings_") else "chatset_back"
-        buttons.append([Button.inline("← Назад", data=back)])
+        buttons.append([Button.inline(t("common.back"), data=back)])
         return buttons
 
     def _format_chat_settings_message(self, settings) -> str:
         def state(on: bool) -> str:
-            return "✅ Вкл" if on else "❌ Выкл"
+            return t("common.on") if on else t("common.off")
 
         return (
-            "⚙️ **Настройки чата**\n\n"
-            f"▶ YouTube: {state(settings.allow_youtube)}\n"
-            f"♪ TikTok: {state(settings.allow_tiktok)}\n"
-            f"𝕏 Twitter/X: {state(settings.allow_twitter)}\n"
-            f"📌 Pinterest: {state(settings.allow_pinterest)}\n\n"
-            f"🤖 Подпись бота: {state(settings.show_bot_caption)}\n"
-            f"📝 Название видео: {state(settings.show_title)}\n"
-            f"📺 Качество YouTube: **{settings.default_quality}**\n\n"
-            "Выключенные платформы бот игнорирует. Только для этой группы."
+            t("settings.chat_header")
+            + "\n\n"
+            + t(
+                "settings.chat_body",
+                youtube=state(settings.allow_youtube),
+                tiktok=state(settings.allow_tiktok),
+                twitter=state(settings.allow_twitter),
+                pinterest=state(settings.allow_pinterest),
+                bot_caption=state(settings.show_bot_caption),
+                title=state(settings.show_title),
+                quality=settings.default_quality,
+            )
         )
 
     def _chat_settings_buttons(self, settings):
@@ -313,17 +317,17 @@ class UserCommandsMixin:
             ],
             [
                 Button.inline(
-                    label("Подпись бота", settings.show_bot_caption),
+                    label(t("settings.buttons.bot_caption"), settings.show_bot_caption),
                     data="chatset_show_bot_caption",
                 ),
             ],
             [
                 Button.inline(
-                    label("Название", settings.show_title),
+                    label(t("settings.buttons.title"), settings.show_title),
                     data="chatset_show_title",
                 ),
             ],
-            [Button.inline("📺 Качество по умолчанию", data="chatset_quality")],
+            [Button.inline(t("settings.buttons.default_quality"), data="chatset_quality")],
         ]
 
     async def stats_handler(self, event: Message):
@@ -337,16 +341,13 @@ class UserCommandsMixin:
 
         buttons = [
             [
-                Button.inline("📊 За день", data="stats_day"),
-                Button.inline("📅 За месяц", data="stats_month"),
+                Button.inline(t("stats.buttons.day"), data="stats_day"),
+                Button.inline(t("stats.buttons.month"), data="stats_month"),
             ],
-            [Button.inline("📈 За все время", data="stats_all")],
+            [Button.inline(t("stats.buttons.all"), data="stats_all")],
         ]
 
-        await event.respond(
-            "📊 Статистика бота Komuzik\n\nВыберите период для просмотра статистики:",
-            buttons=buttons,
-        )
+        await event.respond(t("stats.prompt"), buttons=buttons)
 
     async def search_handler(self, event: Message):
         """Handle /search command."""
@@ -359,30 +360,26 @@ class UserCommandsMixin:
 
         text = getattr(event.message, "text", None)
         if not isinstance(text, str):
-            await event.respond(
-                "Пожалуйста, укажите поисковый запрос.\nПример: /search название песни"
-            )
+            await event.respond(t("search.need_query"))
             return
 
         query = self.command_args(text, "search")
 
         if not query:
-            await event.respond(
-                "Пожалуйста, укажите поисковый запрос.\nПример: /search название песни"
-            )
+            await event.respond(t("search.need_query"))
             return
 
         # Track search
         user_id, username = self._get_user_info(event)
         self.stats.track_search(user_id, username)
 
-        searching_msg = await event.respond(f"🔍 Поиск: {query}...")
+        searching_msg = await event.respond(t("search.searching", query=query))
         page_size = DEFAULT_SEARCH_RESULTS
         results = await search_youtube(query, max_results=page_size, offset=0)
 
         if not results:
             if searching_msg is not None:
-                await searching_msg.edit("Ничего не найдено. Попробуйте изменить запрос.")
+                await searching_msg.edit(t("search.empty"))
             return
 
         session_token = uuid.uuid4().hex[:16]
@@ -406,10 +403,7 @@ class UserCommandsMixin:
         offset = int(session.get("offset") or 0)
         start = offset + 1
         end = offset + len(results)
-        return (
-            f"Выберите видео ({start}–{end}):\n"
-            "Превью — отдельной кнопкой. «Ещё 10» подгружает следующую страницу."
-        )
+        return t("search.page", start=start, end=end)
 
     def _search_page_buttons(self, session_token: str) -> list:
         session = SEARCH_SESSIONS.get(session_token) or {}
@@ -423,7 +417,7 @@ class UserCommandsMixin:
             duration = int(result["duration"]) if result.get("duration") else 0
             duration_min = duration // 60
             duration_sec = duration % 60
-            title = str(result.get("title") or "Без названия")
+            title = str(result.get("title") or t("common.untitled"))
             button_text = (
                 f"{num}. {title[:48]}{'...' if len(title) > 48 else ''}"
                 f" ({duration_min}:{duration_sec:02d})"
@@ -438,10 +432,10 @@ class UserCommandsMixin:
             )
 
         nav: list = [
-            Button.inline("🖼 Превью", data=f"searchprev_{session_token}"),
+            Button.inline(t("search.buttons.preview"), data=f"searchprev_{session_token}"),
         ]
         if session.get("has_more"):
-            nav.append(Button.inline("➡️ Ещё 10", data=f"searchmore_{session_token}"))
+            nav.append(Button.inline(t("search.buttons.more"), data=f"searchmore_{session_token}"))
         buttons.append(nav)
         return buttons
 
@@ -449,7 +443,7 @@ class UserCommandsMixin:
         """Handle statistics view callback — send infographic image."""
         period = data.split("_")[1]  # Extract period (day, month, all)
 
-        await event.answer("Рисую инфографику...")
+        await event.answer(t("stats.rendering"))
 
         try:
             stats = self.stats.get_statistics(period)
@@ -462,10 +456,10 @@ class UserCommandsMixin:
 
             buttons = [
                 [
-                    Button.inline("📊 За день", data="stats_day"),
-                    Button.inline("📅 За месяц", data="stats_month"),
+                    Button.inline(t("stats.buttons.day"), data="stats_day"),
+                    Button.inline(t("stats.buttons.month"), data="stats_month"),
                 ],
-                [Button.inline("📈 За все время", data="stats_all")],
+                [Button.inline(t("stats.buttons.all"), data="stats_all")],
             ]
 
             # Prefer editing current message into a photo; fall back to new message.
@@ -480,13 +474,13 @@ class UserCommandsMixin:
 
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")
-            await event.edit(f"Произошла ошибка при получении статистики: {e!s}")
+            await event.edit(t("stats.error", error=str(e)))
 
     async def _handle_settings_callback(self, event, data: str):
         """Toggle personal settings / open quality screen."""
         user_id = cast("int | None", event.sender_id)
         if user_id is None:
-            await event.answer("Не удалось определить пользователя.", alert=True)
+            await event.answer(t("common.user_unknown_alert"), alert=True)
             return
 
         if data == "settings_quality":
@@ -514,7 +508,7 @@ class UserCommandsMixin:
                 self._format_quality_settings_message(settings.default_quality, scope="user"),
                 buttons=self._quality_settings_buttons(settings.default_quality, prefix="settings_q_"),
             )
-            await event.answer(f"Качество: {settings.default_quality}")
+            await event.answer(t("settings.quality_set", quality=settings.default_quality))
             return
 
         key = "show_bot_caption" if data == "settings_bot" else None
@@ -529,12 +523,12 @@ class UserCommandsMixin:
             self._format_settings_message(settings),
             buttons=self._settings_buttons(settings),
         )
-        await event.answer("Сохранено")
+        await event.answer(t("common.saved"))
 
     async def _handle_chat_settings_callback(self, event, data: str):
         """Toggle group chat settings (admins only)."""
         if not await self._is_chat_admin(event):
-            await event.answer("Только администраторы могут менять настройки.", alert=True)
+            await event.answer(t("settings.chat_admin_only_alert"), alert=True)
             return
 
         chat_id = int(event.chat_id)
@@ -564,7 +558,7 @@ class UserCommandsMixin:
                 self._format_quality_settings_message(settings.default_quality, scope="chat"),
                 buttons=self._quality_settings_buttons(settings.default_quality, prefix="chatset_q_"),
             )
-            await event.answer(f"Качество: {settings.default_quality}")
+            await event.answer(t("settings.quality_set", quality=settings.default_quality))
             return
 
         key = data.removeprefix("chatset_")
@@ -584,4 +578,4 @@ class UserCommandsMixin:
             self._format_chat_settings_message(settings),
             buttons=self._chat_settings_buttons(settings),
         )
-        await event.answer("Сохранено")
+        await event.answer(t("common.saved"))

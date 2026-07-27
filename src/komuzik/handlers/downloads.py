@@ -32,6 +32,7 @@ from ..downloaders import (
     send_image_content,
     send_video_content,
 )
+from ..i18n import t
 from ..inline_query import parse_inline_query
 from ..playlist import find_playlist_url
 from ..search_preview import render_search_preview_async
@@ -74,16 +75,18 @@ class DownloadsMixin:
                 # Handle /cancel command
                 if report_text.strip() == "/cancel":
                     REPORT_STATES.pop(user_id, None)
-                    await event.respond("❌ Отправка отчета отменена.")
+                    await event.respond(t("report.cancel"))
                 return
 
             # Save report to database
-            db_text = report_text or "[Медиафайл]"
+            db_text = report_text or t("report.media_placeholder")
             self.stats.save_user_report(user_id, username, db_text)
 
             # Send report to admins (header + 1:1 copy without "forwarded from")
-            header_text = (
-                f"📋 **Новый отчет**\nОт: @{username or user_id} (номер: {user_id})"
+            header_text = t(
+                "report.new_header",
+                username=username or user_id,
+                user_id=user_id,
             )
             user_report_msg_id = int(message_obj.id) if message_obj is not None else 0
 
@@ -104,7 +107,7 @@ class DownloadsMixin:
                     logger.error(f"Failed to send report to admin {admin_id}: {e}")
 
             # Confirm to user
-            await event.respond("✅ Спасибо! Ваш отчет отправлен администраторам.")
+            await event.respond(t("report.thanks"))
 
             # Clear state
             REPORT_STATES.pop(user_id, None)
@@ -169,10 +172,7 @@ class DownloadsMixin:
         # Check for YouTube (including Shorts)
         youtube_match = YOUTUBE_REGEX.search(text)
         if not youtube_match:
-            await event.respond(
-                "Пожалуйста, отправьте корректную ссылку на видео YouTube, YouTube Shorts, "
-                "плейлист YouTube / Music, TikTok, Twitter/X или Pinterest."
-            )
+            await event.respond(t("download.invalid_url"))
             return
 
         matched_url = youtube_match.group(0)
@@ -211,7 +211,7 @@ class DownloadsMixin:
             client = event.client
             if client is None:
                 await event.respond(
-                    "Произошла ошибка: клиент Telegram недоступен.",
+                    t("common.telegram_client_unavailable"),
                     reply_to=reply_to,
                 )
                 return
@@ -219,7 +219,7 @@ class DownloadsMixin:
             action = "audio" if parsed.mode == "audio" else "video"
             async with client.action(event.chat_id, action):
                 processing_msg = await event.respond(
-                    f"Загрузка ({parsed.description})…",
+                    t("download.status", description=parsed.description),
                     reply_to=reply_to,
                 )
                 file_path, metadata, media_kind = await self._download_for_inline(parsed)
@@ -264,7 +264,7 @@ class DownloadsMixin:
             )
             try:
                 await event.respond(
-                    format_download_error(e, context="❌ Не удалось загрузить:"),
+                    format_download_error(e, context=t("download.failed_context")),
                     reply_to=reply_to,
                 )
             except Exception as send_error:
@@ -280,8 +280,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка TikTok видео... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке TikTok видео:",
+            status_text=t("download.tiktok.status"),
+            error_context=t("download.tiktok.error"),
             download=lambda: download_tiktok_video(url),
             send=self._send_video_media,
             track=self.stats.track_tiktok_download,
@@ -307,8 +307,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка видео... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при загрузке:",
+            status_text=t("download.youtube.status"),
+            error_context=t("download.youtube.error"),
             download=lambda: download_hls_host_video(url),
             send=self._send_video_media,
             track=track,
@@ -321,8 +321,8 @@ class DownloadsMixin:
         token = self._store_callback_url(url)
         buttons = [
             [
-                Button.inline("🎬 Видео", data=f"content_video_{token}"),
-                Button.inline("🎵 Аудио", data=f"content_audio_{token}"),
+                Button.inline(t("download.buttons.video"), data=f"content_video_{token}"),
+                Button.inline(t("download.buttons.audio"), data=f"content_audio_{token}"),
             ]
         ]
         user_id = cast("int | None", event.sender_id)
@@ -330,11 +330,11 @@ class DownloadsMixin:
             settings = self.stats.get_user_settings(user_id)
             if settings.last_mode and settings.last_quality:
                 if settings.last_mode == "audio":
-                    label = f"🔄 Аудио {settings.last_quality}"
+                    label = t("download.buttons.repeat_audio", quality=settings.last_quality)
                 else:
-                    label = f"🔄 Видео {settings.last_quality}"
+                    label = t("download.buttons.repeat_video", quality=settings.last_quality)
                 buttons.append([Button.inline(label, data=f"content_repeat_{token}")])
-        await event.respond("Выберите тип контента для загрузки:", buttons=buttons)
+        await event.respond(t("download.choose_content_type"), buttons=buttons)
 
     async def _handle_youtube_shorts(self, event: Message, url: str):
         """Handle YouTube Shorts download."""
@@ -354,8 +354,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка YouTube Short... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке YouTube Short:",
+            status_text=t("download.youtube_short.status"),
+            error_context=t("download.youtube_short.error"),
             download=lambda: download_youtube_video(url, quality="best"),
             send=self._send_video_media,
             track=track,
@@ -368,7 +368,7 @@ class DownloadsMixin:
         token = data[7:]  # Remove 'select_' prefix
         url = self._resolve_callback_url(token)
         if not url:
-            await event.edit("Ссылка для этого результата больше недоступна. Повторите поиск.")
+            await event.edit(t("download.link_expired_search"))
             return
         CALLBACK_URLS.pop(token, None)
         await self._show_content_type_selection(event, url)
@@ -378,7 +378,7 @@ class DownloadsMixin:
         token = data.removeprefix("searchprev_")
         session = SEARCH_SESSIONS.get(token)
         if not session:
-            await event.answer("Сессия поиска устарела — повторите /search.", alert=True)
+            await event.answer(t("search.session_expired"), alert=True)
             return
 
         await event.answer()
@@ -387,7 +387,7 @@ class DownloadsMixin:
         image_path: Path | None = None
         status = None
         try:
-            status = await event.respond("⏳ Собираю превью…")
+            status = await event.respond(t("search.preview_building"))
             enriched = await enrich_youtube_search_stats(results, timeout=12.0)
             session["results"] = enriched
             start_index = int(session.get("offset") or 0) + 1
@@ -404,7 +404,7 @@ class DownloadsMixin:
             await self.client.send_file(
                 event.chat_id,
                 str(image_path),
-                caption=f"🖼 Превью поиска: {query}",
+                caption=t("search.preview_caption", query=query),
                 reply_to=reply_to,
             )
             if status is not None:
@@ -416,11 +416,11 @@ class DownloadsMixin:
             logger.error(f"Failed to render search preview: {e}")
             if status is not None:
                 try:
-                    await status.edit("Не удалось собрать превью.")
+                    await status.edit(t("search.preview_failed"))
                 except Exception:
                     pass
             else:
-                await event.answer("Не удалось собрать превью.", alert=True)
+                await event.answer(t("search.preview_failed"), alert=True)
         finally:
             if image_path is not None:
                 try:
@@ -433,24 +433,24 @@ class DownloadsMixin:
         token = data.removeprefix("searchmore_")
         session = SEARCH_SESSIONS.get(token)
         if not session:
-            await event.answer("Сессия поиска устарела — повторите /search.", alert=True)
+            await event.answer(t("search.session_expired"), alert=True)
             return
 
         query = str(session.get("query") or "")
         page_size = int(session.get("page_size") or DEFAULT_SEARCH_RESULTS)
         offset = int(session.get("offset") or 0) + page_size
 
-        await event.answer("Ищу ещё…")
+        await event.answer(t("search.loading_more"))
         results = await search_youtube(query, max_results=page_size, offset=offset)
         if not results:
             session["has_more"] = False
             try:
                 await event.edit(
-                    self._format_search_page_text(token) + "\n\nБольше результатов нет.",
+                    self._format_search_page_text(token) + "\n\n" + t("search.no_more"),
                     buttons=self._search_page_buttons(token),
                 )
             except Exception:
-                await event.answer("Больше результатов нет.", alert=True)
+                await event.answer(t("search.no_more"), alert=True)
             return
 
         session["offset"] = offset
@@ -470,22 +470,26 @@ class DownloadsMixin:
         content_type, token = parts[1], parts[2]
         url = self._resolve_callback_url(token)
         if not url:
-            await event.edit("Ссылка для этого выбора больше недоступна. Повторите поиск.")
+            await event.edit(t("download.link_expired_choice"))
             return
 
         if content_type == "repeat":
             user_id = cast("int | None", event.sender_id)
             if user_id is None:
-                await event.answer("Не удалось определить пользователя.", alert=True)
+                await event.answer(t("common.user_unknown_alert"), alert=True)
                 return
             settings = self.stats.get_user_settings(user_id)
             if not settings.last_mode or not settings.last_quality:
-                await event.answer("Нет сохранённого формата — выберите вручную.", alert=True)
+                await event.answer(t("download.no_saved_format"), alert=True)
                 return
             mode = settings.last_mode
             quality = settings.last_quality
             await event.answer(
-                f"Повтор: {'аудио' if mode == 'audio' else 'видео'} {quality}..."
+                t(
+                    "download.repeat_format",
+                    mode="аудио" if mode == "audio" else "видео",
+                    quality=quality,
+                )
             )
             if mode == "audio":
                 await self._download_and_send_audio(event, url, quality)
@@ -502,10 +506,10 @@ class DownloadsMixin:
         """Show video quality selection buttons."""
         url = self._resolve_callback_url(token)
         if not url:
-            await event.edit("Ссылка для этого выбора больше недоступна. Повторите поиск.")
+            await event.edit(t("download.link_expired_choice"))
             return
 
-        await event.answer("Проверка доступных форматов...")
+        await event.answer(t("download.checking_formats"))
         logger.info(f"Getting available formats for: {url}")
 
         available_heights = await get_available_formats(url)
@@ -539,23 +543,21 @@ class DownloadsMixin:
 
         if not buttons:
             logger.warning(f"No buttons created for available heights: {available_heights}")
-            await event.edit(
-                "К сожалению, для этого видео нет доступных форматов. Попробуйте другое видео."
-            )
+            await event.edit(t("download.no_formats"))
             return
 
-        await event.edit("Выберите качество видео:", buttons=buttons)
+        await event.edit(t("download.choose_video_quality"), buttons=buttons)
 
     async def _show_audio_quality_selection(self, event, token: str):
         """Show audio quality selection buttons."""
         buttons = [
             [
-                Button.inline("Высокое качество", data=f"audio_high_{token}"),
-                Button.inline("Среднее качество", data=f"audio_medium_{token}"),
+                Button.inline(t("download.buttons.audio_high"), data=f"audio_high_{token}"),
+                Button.inline(t("download.buttons.audio_medium"), data=f"audio_medium_{token}"),
             ],
-            [Button.inline("Низкое качество", data=f"audio_low_{token}")],
+            [Button.inline(t("download.buttons.audio_low"), data=f"audio_low_{token}")],
         ]
-        await event.edit("Выберите качество аудио:", buttons=buttons)
+        await event.edit(t("download.choose_audio_quality"), buttons=buttons)
 
     async def _handle_quality_callback(self, event, data: str):
         """Handle video quality selection."""
@@ -566,9 +568,9 @@ class DownloadsMixin:
         quality, token = parts[1], parts[2]
         url = self._resolve_callback_url(token)
         if not url:
-            await event.edit("Ссылка для этой загрузки больше недоступна. Повторите поиск.")
+            await event.edit(t("download.link_expired_download"))
             return
-        await event.answer(f"Загрузка видео в качестве {quality}...")
+        await event.answer(t("download.video_quality_progress", quality=quality))
         # Keep the token: users often try another quality from the same keyboard.
         # CALLBACK_URLS is a TTLCache and will expire on its own.
         await self._download_and_send_video(event, url, quality)
@@ -582,9 +584,9 @@ class DownloadsMixin:
         quality, token = parts[1], parts[2]
         url = self._resolve_callback_url(token)
         if not url:
-            await event.edit("Ссылка для этой загрузки больше недоступна. Повторите поиск.")
+            await event.edit(t("download.link_expired_download"))
             return
-        await event.answer(f"Загрузка аудио в качестве {quality}...")
+        await event.answer(t("download.audio_quality_progress", quality=quality))
         await self._download_and_send_audio(event, url, quality)
 
     async def _download_and_send_video(self, event, url: str, quality: str):
@@ -610,8 +612,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка видео... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке видео:",
+            status_text=t("download.youtube.status"),
+            error_context=t("download.youtube.error"),
             download=lambda: download_youtube_video(url, quality),
             send=self._send_video_media,
             track=track,
@@ -641,8 +643,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка аудио... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке аудио:",
+            status_text=t("download.audio.status"),
+            error_context=t("download.audio.error"),
             download=lambda: download_youtube_audio(url, quality),
             send=self._send_audio_media,
             track=track,
@@ -655,8 +657,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка с Twitter... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке контента:",
+            status_text=t("download.twitter.status"),
+            error_context=t("download.twitter.error"),
             download=lambda: download_twitter_video(url),
             send=self._send_media_by_content_type,
             track=self.stats.track_twitter_download,
@@ -669,8 +671,8 @@ class DownloadsMixin:
         await self._download_and_send_content(
             event,
             url,
-            status_text="Загрузка с Pinterest... Пожалуйста, подождите.",
-            error_context="Произошла ошибка при обработке Pinterest:",
+            status_text=t("download.pinterest.status"),
+            error_context=t("download.pinterest.error"),
             download=lambda: download_pinterest_content(url),
             send=self._send_media_by_content_type,
             track=self.stats.track_pinterest_download,

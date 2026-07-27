@@ -243,3 +243,361 @@ help:
       Ответьте командой `/post` на сообщение, которое хотите разослать всем известным пользователям бота.
 
       Используйте редко и осознанно: это массовая рассылка.
+
+common:
+  loading: "⏳ Загрузка…"
+  no_data: "Нет данных"
+  back: "← Назад"
+  stop: "⏹ Стоп"
+  cancel: "❌ Отмена"
+  on: "✅ Вкл"
+  off: "❌ Выкл"
+  untitled: "Без названия"
+  saved: "Сохранено"
+  telegram_client_unavailable: "Произошла ошибка: клиент Telegram недоступен."
+  generic_error: "Произошла ошибка: {error}"
+  user_unknown: "❌ Не удалось определить пользователя."
+  user_unknown_alert: "Не удалось определить пользователя."
+  back_to_list: "← К списку"
+  open_profile: "[открыть профиль](tg://user?id={user_id})"
+
+ban:
+  message: |-
+    🚫 Вы заблокированы.
+    Причина: {reason}
+    Если ошибка — /report
+
+download:
+  active_limit: |-
+    ⚠️ У вас уже есть активная загрузка ({active}/{max}).
+    Пожалуйста, дождитесь завершения текущей загрузки.
+  active_limit_short: "⚠️ Уже есть активная загрузка ({active}/{max}). Подождите."
+  failed_context: "❌ Не удалось загрузить:"
+  invalid_url: |-
+    Пожалуйста, отправьте корректную ссылку на видео YouTube, YouTube Shorts, плейлист YouTube / Music, TikTok, Twitter/X или Pinterest.
+  status: "Загрузка ({description})…"
+  choose_content_type: "Выберите тип контента для загрузки:"
+  choose_video_quality: "Выберите качество видео:"
+  choose_audio_quality: "Выберите качество аудио:"
+  no_formats: "К сожалению, для этого видео нет доступных форматов. Попробуйте другое видео."
+  checking_formats: "Проверка доступных форматов..."
+  link_expired_search: "Ссылка для этого результата больше недоступна. Повторите поиск."
+  link_expired_choice: "Ссылка для этого выбора больше недоступна. Повторите поиск."
+  link_expired_download: "Ссылка для этой загрузки больше недоступна. Повторите поиск."
+  no_saved_format: "Нет сохранённого формата — выберите вручную."
+  repeat_format: "Повтор: {mode} {quality}..."
+  video_quality_progress: "Загрузка видео в качестве {quality}..."
+  audio_quality_progress: "Загрузка аудио в качестве {quality}..."
+  buttons:
+    video: "🎬 Видео"
+    audio: "🎵 Аудио"
+    repeat_audio: "🔄 Аудио {quality}"
+    repeat_video: "🔄 Видео {quality}"
+    audio_high: "Высокое качество"
+    audio_medium: "Среднее качество"
+    audio_low: "Низкое качество"
+  tiktok:
+    status: "Загрузка TikTok видео... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке TikTok видео:"
+  youtube:
+    status: "Загрузка видео... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке видео:"
+  youtube_short:
+    status: "Загрузка YouTube Short... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке YouTube Short:"
+  audio:
+    status: "Загрузка аудио... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке аудио:"
+  twitter:
+    status: "Загрузка с Twitter... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке контента:"
+  pinterest:
+    status: "Загрузка с Pinterest... Пожалуйста, подождите."
+    error: "Произошла ошибка при обработке Pinterest:"
+
+report:
+  cancel: "❌ Отправка отчета отменена."
+  prompt: "📝 Опишите проблему (или отправьте /cancel для отмены):"
+  thanks: "✅ Спасибо! Ваш отчет отправлен администраторам."
+  new_header: "📋 **Новый отчет**\nОт: @{username} (номер: {user_id})"
+  media_placeholder: "[Медиафайл]"
+  reply_sent: "✅ Ответ отправлен пользователю."
+  reply_failed: "❌ Не удалось отправить ответ: {error}"
+
+admin:
+  no_access: "❌ У вас нет доступа к этой команде."
+  broadcast_in_progress: "⚠️ У вас уже идёт рассылка. Нажмите «⏹ Стоп» или дождитесь завершения."
+  post_usage: "ℹ️ Используйте команду /post в ответе на сообщение, которое нужно переслать всем пользователям."
+  broadcast_start: "📢 Рассылка: 0/{total}…"
+  panel: |-
+    🛠 **Админ-панель**
+
+    Одновременных загрузок: **{concurrent}**
+    Плейлист / сутки (глобально): **{playlist_limit}**
+    Блокировок: **{ban_count}**
+
+    Персональный лимит: `/setuserlimit <айди> <число>`
+    Сброс лимита: `/unsetuserlimit <айди>`
+    Блок: `/ban <айди> причина` · `/unban <айди>`
+  buttons:
+    concurrent: "⚙️ Одновременные"
+    playlist_limit: "📺 Лимит плейлиста"
+    users: "👥 Пользователи"
+  users:
+    known: "Известные"
+    anon: "Анонимы"
+    empty: "Список пуст."
+    header: "👥 **Пользователи → {tab}**"
+    header_page: "👥 **Пользователи → {tab}** ({start}–{end} из {total})"
+    tab_known: "{mark}Известные ({count})"
+    tab_anon: "{mark}Анонимы ({count})"
+  history:
+    header: "📥 **История загрузок**"
+    user_id: "Номер: `{user_id}`"
+    banned: "🚫 **Заблокирован:** {reason}"
+    empty: "Нет загрузок."
+    page: "Записи {start}–{end} из {total}:"
+  examples:
+    user: "Пример: `/user 123456789`"
+    ban: "Пример: `/ban 123456789 причина`"
+    unban: "Пример: `/unban 123456789`"
+    setconcurrent: "Пример: `/setconcurrent 3` (число ≥ 1)"
+    setplaylistlimit: "Пример: `/setplaylistlimit 50` (число ≥ 1)"
+    setuserlimit: "Пример: `/setuserlimit 123456789 100` (число ≥ 1)"
+    unsetuserlimit: "Пример: `/unsetuserlimit 123456789`"
+  ban:
+    admin_protected: "❌ Нельзя заблокировать администратора бота."
+    success: "✅ Пользователь `{target_id}` заблокирован.\nПричина: {reason}"
+  unban:
+    success: "✅ Пользователь `{target_id}` разблокирован."
+    not_banned: "ℹ️ Пользователь `{target_id}` не был в блокировке."
+  limits:
+    concurrent_set: "✅ Одновременных загрузок: **{n}**"
+    playlist_set: "✅ Плейлист / сутки (глобально): **{n}**"
+    user_set: "✅ Персональный лимит для `{target_id}`: **{limit}**"
+    user_cleared: "✅ Персональный лимит для `{target_id}` сброшен."
+    invalid_number: "❌ Число должно быть ≥ 1."
+    prompt_concurrent: "одновременных загрузок"
+    prompt_playlist: "плейлист / сутки"
+    enter_value: "Введите новое значение ({label}), целое число ≥ 1:"
+  storage:
+    group_only: "⚠️ Команду нужно вызвать в группе-хранилище."
+    checking: "⏳ Проверяю права…"
+    no_delete: "❌ Не могу удалять сообщения в этой группе ({error}). Дай боту право удалять сообщения и повтори /setstorage."
+    set_ok: "✅ Эта группа — хранилище бота.\nНомер чата: `{chat_id}`"
+    not_set: "ℹ️ Хранилище и так не задано."
+    cleared: "✅ Хранилище сброшено (было `{prev}`)."
+  broadcast:
+    no_active: "Активной рассылки нет."
+    stopping: "⏹ Останавливаю рассылку…"
+    progress: "📢 Рассылка: {done}/{total} (✅ {sent} · ⚠️ {failed})"
+    progress_flood: " · ⏳ FloodWait×{count}"
+    cancelled: "⏹ Рассылка остановлена"
+    aborted_flood: "🛑 Рассылка прервана (PeerFlood)"
+    finished: "✅ Рассылка завершена"
+    sent: "Отправлено: {sent}/{total}"
+    failed: "Не удалось: {failed}"
+    flood_waits: "FloodWait: {count}"
+
+settings:
+  chat_admin_only: "❌ Только администраторы могут менять настройки чата."
+  chat_admin_only_alert: "Только администраторы могут менять настройки."
+  personal_header: "⚙️ **Личные настройки**"
+  personal_body: |-
+    🤖 Подпись бота (@{bot_username}): {bot_state}
+    📝 Название видео: {title_state}
+    📺 Качество (инлайн): **{quality}**
+
+    Качество влияет на инлайн без префикса. В ЛС по ссылке выбор формата как раньше.
+  chat_header: "⚙️ **Настройки чата**"
+  chat_body: |-
+    ▶ YouTube: {youtube}
+    ♪ TikTok: {tiktok}
+    𝕏 Twitter/X: {twitter}
+    📌 Pinterest: {pinterest}
+
+    🤖 Подпись бота: {bot_caption}
+    📝 Название видео: {title}
+    📺 Качество YouTube: **{quality}**
+
+    Выключенные платформы бот игнорирует. Только для этой группы.
+  quality_header_user: "📺 **Качество по умолчанию** для **инлайна** (личные настройки)"
+  quality_header_chat: "📺 **Качество по умолчанию** для **этой группы** (автозагрузка)"
+  quality_body: |-
+    Сейчас: **{quality}**
+
+    Ориентир размера (ролик ~3–5 мин):
+    • 360p — ~5–15 МБ
+    • 480p — ~15–30 МБ
+    • 720p — ~30–60 МБ
+    • 1080p — ~60–120+ МБ
+
+    ⚠️ Не ставьте высокое качество без нужды — файлы быстро забивают память телефона.
+
+    Префикс в запросе (`480`, `music`…) всегда важнее этого дефолта.
+  quality_set: "Качество: {quality}"
+  buttons:
+    bot_on: "🤖 Подпись бота: включить"
+    bot_off: "🤖 Подпись бота: выключить"
+    title_on: "📝 Название: включить"
+    title_off: "📝 Название: выключить"
+    default_quality: "📺 Качество по умолчанию"
+    bot_caption: "Подпись бота"
+    title: "Название"
+
+limits:
+  header: "📊 **Ваши лимиты**"
+  footer: "Суточный лимит плейлиста обновляется в полночь по Москве."
+  concurrent_unlimited: "Одновременные загрузки: **{active}** активных · без лимита"
+  concurrent: "Одновременные загрузки: **{active}/{cap}** активных"
+  playlist_unlimited: "Плейлист / сутки (МСК): без лимита"
+  playlist: "Плейлист / сутки (МСК): **{used}/{limit}** (осталось {remaining}, {source})"
+  source_personal: "персональный"
+  source_global: "общий"
+
+search:
+  need_query: |-
+    Пожалуйста, укажите поисковый запрос.
+    Пример: /search название песни
+  searching: "🔍 Поиск: {query}..."
+  empty: "Ничего не найдено. Попробуйте изменить запрос."
+  page: |-
+    Выберите видео ({start}–{end}):
+    Превью — отдельной кнопкой. «Ещё 10» подгружает следующую страницу.
+  no_more: "Больше результатов нет."
+  loading_more: "Ищу ещё…"
+  session_expired: "Сессия поиска устарела — повторите /search."
+  preview_building: "⏳ Собираю превью…"
+  preview_caption: "🖼 Превью поиска: {query}"
+  preview_failed: "Не удалось собрать превью."
+  buttons:
+    preview: "🖼 Превью"
+    more: "➡️ Ещё 10"
+
+inline:
+  access_restricted: "🚫 Доступ ограничен"
+  hint_title: "Ссылка или поисковый запрос"
+  hint_description: "YouTube / TikTok / X / Pinterest · или текст поиска"
+  hint_text: |-
+    После @бота укажите ссылку или текст для поиска на YouTube.
+    Ссылка: `music` / `480` + URL. Поиск: просто слова.
+    Превью картинками — только в ЛС через /search.
+    Сначала напишите боту /start в ЛС.
+  short_title: "Продолжите ввод…"
+  short_description: "Нужно минимум 3 символа для поиска"
+  short_text: "Введите ещё символы или вставьте ссылку."
+  timeout_title: "Поиск не успел"
+  timeout_description: "Напишите /search в ЛС"
+  timeout_text: "YouTube отвечает медленно для inline. Используйте /search в личке."
+  empty_title: "Ничего не найдено"
+  empty_description: "Попробуйте другой запрос"
+  empty_text: "По этому запросу ничего не нашлось."
+  error_title: "Ошибка inline"
+  error_description: "Попробуйте /search в ЛС"
+  error_text: "Не удалось обработать inline-запрос."
+
+stats:
+  prompt: |-
+    📊 Статистика бота Komuzik
+
+    Выберите период для просмотра статистики:
+  rendering: "Рисую инфографику..."
+  error: "Произошла ошибка при получении статистики: {error}"
+  buttons:
+    day: "📊 За день"
+    month: "📅 За месяц"
+    all: "📈 За все время"
+
+playlist:
+  reading: "📃 Читаю плейлист…"
+  open_failed: "❌ Не удалось открыть плейлист: {error}"
+  empty: "Плейлист пуст или недоступен."
+  session_expired: "Сессия плейлиста истекла. Пришлите ссылку снова."
+  hint: "Сначала Видео или Аудио → качество. Чтобы убрать треки — reply на превью (см. инструкцию в сообщении)."
+  stopping: "⏹ Останавливаю… дошлю уже скачанное."
+  nothing_to_download: "Нечего скачивать — всё исключено."
+  quota_exceeded: "⚠️ Выбрано {selected}, доступно {remaining} до конца дня (МСК). Уменьши выбор (исключения) или подожди завтра."
+  exclusion_help: |-
+    Не понял команду.
+
+    Ответьте **reply** на превью плейлиста, например:
+    • `-5` — убрать 5-й
+    • `-1,3,8` — убрать несколько
+    • `-1-20` — убрать диапазон
+    • `+5` — вернуть 5-й
+    • `+11,13,15` — вернуть несколько
+  quality_video: |-
+    📃 **{title}**
+
+    К загрузке: **{count}**
+    Выберите качество видео для всего плейлиста:
+  quality_audio: |-
+    📃 **{title}**
+
+    К загрузке: **{count}**
+    Выберите качество аудио для всего плейлиста:
+  downloading_video: "Качаю видео {quality}…"
+  downloading_audio: "Качаю аудио {quality}…"
+  batch_send_failed: "⚠️ Не удалось отправить пачку ({count}): {error}"
+  skip_item: "⚠️ Пропуск {index}/{total}: {title} — {error}"
+  quota_suffix: " · лимит: {used}/{limit}"
+  progress_start: |-
+    ⏳ Плейлист **{title}**
+    Готово: **0/{total}** · отправлено: 0{quota}
+    Режим: {mode} {quality}
+
+    Начинаю…
+  progress_current: |-
+    ⏳ Плейлист **{title}**
+    Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota}
+    Режим: {mode} {quality}
+
+    Сейчас: [{item_title}]({url})
+    ({index}/{total})
+  progress_downloaded: |-
+    ⏳ Плейлист **{title}**
+    Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota}
+    Режим: {mode} {quality}
+
+    ✅ Скачан: [{item_title}]({url})
+    В пачке: {batch_size}/{batch_max}
+  progress_batch: |-
+    ⏳ Плейлист **{title}**
+    Готово: **{done}/{total}** · {batch_progress}
+  progress_after_batch: |-
+    ⏳ Плейлист **{title}**
+    Готово: **{done}/{total}** · отправлено: {sent} · ошибок: {fail}{quota}
+    Режим: {mode} {quality}
+  batch_from_storage: "отправляю пачку {count} из хранилища…"
+  batch_sending: "отправляю пачку {count}…"
+  remainder_from_storage: "отправляю остаток ({count}) из хранилища…"
+  remainder_sending: "отправляю остаток ({count})…"
+  cancelled_summary: |-
+    ⏹ Остановлено.
+    Скачано: {done}/{total} · отправлено: {sent} · ошибок: {fail}
+  done_summary: "✅ Плейлист готов: отправлено {sent}/{total}"
+  done_with_errors: " (ошибок: {fail})"
+  buttons:
+    video: "🎬 Видео"
+    audio: "🎵 Аудио"
+    download_selected: "✅ Скачать выбранное ({count})"
+    quality_high: "Высокое"
+    quality_medium: "Среднее"
+    quality_low: "Низкое"
+  preview:
+    exclusion_help: |-
+      **Как убрать треки из загрузки**
+      Ответьте **reply** на это сообщение текстом:
+
+      • `-5` — не качать 5-й трек
+      • `-1,3,8` — не качать 1, 3 и 8
+      • `-1-20` — не качать с 1 по 20 включительно
+      • `-1-10,15,20-30` — диапазоны и отдельные номера
+      • `+5` — вернуть 5-й обратно в загрузку
+      • `+11,13,15` — вернуть 11, 13 и 15
+
+      Номера — как в списке ниже. Можно несколько раз подряд.
+    default_title: "Плейлист"
+    stats: "Треков: {total} · к загрузке: **{selected}** · стр. {page}/{pages}"
+    truncated: "⚠️ Показаны первые {max} треков."
+    read_failed: "Не удалось прочитать плейлист"

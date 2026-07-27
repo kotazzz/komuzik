@@ -4,6 +4,7 @@ import logging
 import re
 from typing import Any, cast
 
+from ..i18n import t
 from .common import (
     ACTIVE_BROADCASTS,
     ADMIN_PENDING,
@@ -30,22 +31,22 @@ class CallbacksMixin:
         # Handle report cancel (allowlist for banned users)
         if data == "report_cancel":
             if user_id is None:
-                await event.edit("❌ Не удалось определить пользователя.")
+                await event.edit(t("common.user_unknown"))
                 return
             REPORT_STATES.pop(user_id, None)
-            await event.edit("❌ Отправка отчета отменена.")
+            await event.edit(t("report.cancel"))
             return
 
         if data == "post_cancel":
             if user_id is None or not self._is_bot_admin(user_id):
-                await event.answer("Нет доступа.", alert=True)
+                await event.answer(t("errors.no_access"), alert=True)
                 return
             control = ACTIVE_BROADCASTS.get(user_id)
             if control is None:
-                await event.answer("Активной рассылки нет.", alert=True)
+                await event.answer(t("admin.broadcast.no_active"), alert=True)
                 return
             control.cancel_requested = True
-            await event.answer("⏹ Останавливаю рассылку…")
+            await event.answer(t("admin.broadcast.stopping"))
             return
 
         if user_id is not None and await self._reject_if_banned(
@@ -72,22 +73,22 @@ class CallbacksMixin:
 
         if data in {"admin_set_concurrent", "admin_set_playlist"}:
             if user_id is None or not self._is_bot_admin(user_id):
-                await event.answer("Нет доступа.", alert=True)
+                await event.answer(t("errors.no_access"), alert=True)
                 return
             ADMIN_PENDING[user_id] = "concurrent" if data == "admin_set_concurrent" else "playlist"
             label = (
-                "одновременных загрузок"
+                t("admin.limits.prompt_concurrent")
                 if data == "admin_set_concurrent"
-                else "плейлист / сутки"
+                else t("admin.limits.prompt_playlist")
             )
             await event.answer()
-            await event.respond(f"Введите новое значение ({label}), целое число ≥ 1:")
+            await event.respond(t("admin.limits.enter_value", label=label))
             return
 
         users_page_match = re.fullmatch(r"admin_users_(known|anon)_p_(\d+)", data)
         if users_page_match or data.startswith("admin_users_p_"):
             if user_id is None or not self._is_bot_admin(user_id):
-                await event.answer("Нет доступа.", alert=True)
+                await event.answer(t("errors.no_access"), alert=True)
                 return
             if users_page_match:
                 kind = users_page_match.group(1)
@@ -107,11 +108,11 @@ class CallbacksMixin:
         admin_user_match = re.fullmatch(r"admin_user_(\d+)", data)
         if admin_user_match:
             if user_id is None or not self._is_bot_admin(user_id):
-                await event.answer("Нет доступа.", alert=True)
+                await event.answer(t("errors.no_access"), alert=True)
                 return
             target_id = int(admin_user_match.group(1))
             if not await self._send_admin_history_page(event, target_id, 0, edit=True):
-                await event.answer("Нет данных", alert=True)
+                await event.answer(t("common.no_data"), alert=True)
                 return
             await event.answer()
             return
@@ -119,12 +120,12 @@ class CallbacksMixin:
         admin_hist_match = re.fullmatch(r"admin_hist_(\d+)_p_(\d+)", data)
         if admin_hist_match:
             if user_id is None or not self._is_bot_admin(user_id):
-                await event.answer("Нет доступа.", alert=True)
+                await event.answer(t("errors.no_access"), alert=True)
                 return
             target_id = int(admin_hist_match.group(1))
             page = int(admin_hist_match.group(2))
             if not await self._send_admin_history_page(event, target_id, page, edit=True):
-                await event.answer("Нет данных", alert=True)
+                await event.answer(t("common.no_data"), alert=True)
                 return
             await event.answer()
             return
