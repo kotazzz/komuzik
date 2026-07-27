@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import tempfile
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw
 
@@ -76,11 +78,14 @@ def fmt_duration(seconds: int | float | None) -> str:
 
 def _fetch_image(url: str, timeout: float = 8.0) -> Image.Image | None:
     try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            logger.debug("Refusing non-http(s) thumb URL: %s", url)
+            return None
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KomuzikBot/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             data = resp.read()
-        img = Image.open(BytesIO(data)).convert("RGB")
-        return img
+        return Image.open(BytesIO(data)).convert("RGB")
     except Exception as e:
         logger.debug(f"Failed to fetch thumb {url}: {e}")
         return None
@@ -129,14 +134,23 @@ def _wrap_text(
             continue
         if current:
             lines.append(current)
-        current = word
+            current = word
+        else:
+            # Single word wider than the column — keep it and truncate later.
+            current = word
         if len(lines) >= max_lines:
+            # Fold the pending word into the last visible line so it is not dropped.
+            if current:
+                lines[-1] = f"{lines[-1]} {current}".strip()
+                current = ""
             break
     if current and len(lines) < max_lines:
         lines.append(current)
     lines = lines[:max_lines]
+    # Truncation check against the original word list, not whitespace-collapsed text.
     joined = " ".join(lines)
-    if joined != text and lines:
+    original = " ".join(words)
+    if joined != original and lines:
         last = lines[-1]
         while last and _text_size(draw, last + "…", font)[0] > max_width:
             last = last[:-1]
@@ -181,6 +195,15 @@ def render_search_preview(
     text_x = thumb_x + THUMB_W + TEXT_GAP
     text_max_w = max(120, WIDTH - text_x - PAD)
 
+    thumb_urls = [
+        item.get("thumbnail") if isinstance(item.get("thumbnail"), str) else None
+        for item in results
+    ]
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(thumb_urls)))) as pool:
+        raw_thumbs = list(
+            pool.map(lambda u: _fetch_image(u) if u else None, thumb_urls)
+        )
+
     for i, item in enumerate(results):
         y = header_h + i * ROW_H
         _rounded_rect(draw, (PAD, y, WIDTH - PAD, y + ROW_H - GAP), 14, CARD)
@@ -196,9 +219,7 @@ def render_search_preview(
         )
 
         thumb_y = y + (ROW_H - GAP - THUMB_H) // 2
-        thumb_url = item.get("thumbnail")
-        raw = _fetch_image(thumb_url) if isinstance(thumb_url, str) and thumb_url else None
-        thumb_img = _thumb_slot(raw)
+        thumb_img = _thumb_slot(raw_thumbs[i])
         img.paste(thumb_img, (thumb_x, thumb_y))
 
         # duration badge on thumb

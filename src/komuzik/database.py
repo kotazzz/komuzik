@@ -255,7 +255,7 @@ class Database:
             logger.info("Database connection closed")
 
     def execute(self, query: str, params: tuple = ()):
-        """Execute a database query.
+        """Execute a write query and commit.
 
         Args:
             query: SQL query to execute
@@ -267,9 +267,14 @@ class Database:
         """
         conn = self._connection()
         cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        return cursor
+        try:
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor
+        except Exception:
+            conn.rollback()
+            cursor.close()
+            raise
 
     def fetchone(self, query: str, params: tuple = ()):
         """Fetch one result from query.
@@ -284,8 +289,11 @@ class Database:
         """
         conn = self._connection()
         cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchone()
+        try:
+            cursor.execute(query, params)
+            return cursor.fetchone()
+        finally:
+            cursor.close()
 
     def fetchall(self, query: str, params: tuple = ()):
         """Fetch all results from query.
@@ -300,5 +308,8 @@ class Database:
         """
         conn = self._connection()
         cursor = conn.cursor()
-        cursor.execute(query, params)
-        return cursor.fetchall()
+        try:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+        finally:
+            cursor.close()

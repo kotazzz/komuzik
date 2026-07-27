@@ -6,12 +6,11 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any, cast
 
 from telethon import Button, events
 from telethon.errors import QueryIdInvalidError
@@ -308,10 +307,25 @@ class BotHandlers:
         }
 
     def _cleanup_download_file(self, file_path: str):
-        """Remove the temporary directory that contains a downloaded file."""
-        directory = os.path.dirname(file_path)
-        if os.path.exists(directory):
-            shutil.rmtree(directory)
+        """Remove the mkdtemp root that owns a downloaded file.
+
+        gallery-dl may nest files under ``<tmp>/gallery-dl/...``; deleting only
+        ``dirname(file)`` would leave the outer temp tree behind. We walk up to
+        the direct child of the system temp directory (our ``mkdtemp`` folder)
+        and remove that — never anything outside temp.
+        """
+        try:
+            path = Path(file_path).resolve()
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            path.relative_to(temp_root)
+        except (OSError, ValueError):
+            return
+
+        cur = path if path.is_dir() else path.parent
+        while cur.parent != temp_root and temp_root in cur.parents:
+            cur = cur.parent
+        if cur.parent == temp_root and cur.exists():
+            shutil.rmtree(cur, ignore_errors=True)
 
     async def _bounded(self, awaitable):
         """Run a download under the configured wall-clock budget.
@@ -537,6 +551,10 @@ class BotHandlers:
     async def privacy_handler(self, event: Message):
         """Handle /privacy — send rules and privacy policy link."""
         user_id, _ = self._get_user_info(event)
+        if await self._reject_if_banned(
+            event, user_id, chat_is_group=bool(getattr(event, "is_group", False))
+        ):
+            return
         self._track_user(event)
         await event.respond(MSG_PRIVACY, link_preview=False)
 
@@ -554,7 +572,11 @@ class BotHandlers:
                 f"Одновременные загрузки: **{active}/{concurrent_cap}** активных"
             )
 
-        playlist_limit = self.stats.effective_playlist_limit(user_id, is_admin=is_admin)
+        playlist_limit = self.stats.effective_playlist_limit(
+            user_id,
+            is_admin=is_admin,
+            is_unlimited=unlimited_concurrent,
+        )
         used = self.stats.get_playlist_usage(user_id)
         personal = self.stats.get_user_playlist_limit(user_id)
 
@@ -1248,7 +1270,10 @@ class BotHandlers:
             return
 
         is_admin = user_id in self.download_limiter.ADMIN_USER_IDS
-        remaining = self.stats.remaining_playlist_quota(user_id, is_admin=is_admin)
+        is_unlimited = user_id in self.download_limiter.UNLIMITED_USER_IDS
+        remaining = self.stats.remaining_playlist_quota(
+            user_id, is_admin=is_admin, is_unlimited=is_unlimited
+        )
         if remaining is not None and len(entries) > remaining:
             await event.edit(
                 f"⚠️ Выбрано {len(entries)}, доступно {remaining} до конца дня (МСК). "
@@ -1270,9 +1295,11 @@ class BotHandlers:
         stop_btn = [[Button.inline("⏹ Стоп", data="pl_stop")]]
 
         def quota_status() -> str:
-            if is_admin:
+            if is_admin or is_unlimited:
                 return ""
-            limit = self.stats.effective_playlist_limit(user_id, is_admin=False)
+            limit = self.stats.effective_playlist_limit(
+                user_id, is_admin=False, is_unlimited=False
+            )
             if limit is None:
                 return ""
             used = self.stats.get_playlist_usage(user_id)
@@ -1838,13 +1865,10 @@ class BotHandlers:
             await event.answer(
                 f"Повтор: {'аудио' if mode == 'audio' else 'видео'} {quality}..."
             )
-            try:
-                if mode == "audio":
-                    await self._download_and_send_audio(event, url, quality)
-                else:
-                    await self._download_and_send_video(event, url, quality)
-            finally:
-                CALLBACK_URLS.pop(token, None)
+            if mode == "audio":
+                await self._download_and_send_audio(event, url, quality)
+            else:
+                await self._download_and_send_video(event, url, quality)
             return
 
         if content_type == "video":
@@ -1923,11 +1947,9 @@ class BotHandlers:
             await event.edit("Ссылка для этой загрузки больше недоступна. Повторите поиск.")
             return
         await event.answer(f"Загрузка видео в качестве {quality}...")
-
-        try:
-            await self._download_and_send_video(event, url, quality)
-        finally:
-            CALLBACK_URLS.pop(token, None)
+        # Keep the token: users often try another quality from the same keyboard.
+        # CALLBACK_URLS is a TTLCache and will expire on its own.
+        await self._download_and_send_video(event, url, quality)
 
     async def _handle_audio_callback(self, event, data: str):
         """Handle audio quality selection."""
@@ -1941,11 +1963,7 @@ class BotHandlers:
             await event.edit("Ссылка для этой загрузки больше недоступна. Повторите поиск.")
             return
         await event.answer(f"Загрузка аудио в качестве {quality}...")
-
-        try:
-            await self._download_and_send_audio(event, url, quality)
-        finally:
-            CALLBACK_URLS.pop(token, None)
+        await self._download_and_send_audio(event, url, quality)
 
     async def _download_and_send_video(self, event, url: str, quality: str):
         """Download and send YouTube video."""
@@ -2185,7 +2203,7 @@ class BotHandlers:
 
     def _format_admin_panel(self) -> str:
         concurrent = self.stats.get_max_concurrent(
-            default=self.download_limiter._yaml_concurrent  # noqa: SLF001
+            default=self.download_limiter.yaml_concurrent
         )
         playlist_limit = self.stats.get_playlist_daily_limit()
         ban_count = self.stats.count_bans()
@@ -2291,7 +2309,7 @@ class BotHandlers:
         user_record = user or {"id": target_user_id}
         back_kind = (
             ADMIN_USERS_KIND_ANON
-            if format_user_label(user_record) == "аноним"
+            if not (user_record.get("username") or user_record.get("display_name"))
             else ADMIN_USERS_KIND_KNOWN
         )
         lines = [

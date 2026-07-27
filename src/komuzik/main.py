@@ -1,8 +1,12 @@
 """Main entry point for the Komuzik Telegram bot."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
+import signal
+from pathlib import Path
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -21,17 +25,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Ensure session directory exists
-os.makedirs("session", exist_ok=True)
 
-# Initialize the Telegram client
-if SESSION_STRING:
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH or "")
-    logger.info("Using StringSession for authentication")
-else:
-    session_file = os.path.join(os.getcwd(), "session", "komuzik_bot_session")
-    client = TelegramClient(session_file, API_ID, API_HASH or "")
-    logger.info(f"Using file-based session at {session_file}")
+def build_client() -> TelegramClient:
+    """Create the Telegram client (no network I/O). Safe to call after import."""
+    Path("session").mkdir(parents=True, exist_ok=True)
+    if SESSION_STRING:
+        logger.info("Using StringSession for authentication")
+        return TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH or "")
+    session_file = str(Path.cwd() / "session" / "komuzik_bot_session")
+    logger.info("Using file-based session at %s", session_file)
+    return TelegramClient(session_file, API_ID, API_HASH or "")
 
 
 async def main():
@@ -41,8 +44,10 @@ async def main():
         logger.error("Please set API_ID, API_HASH and BOT_TOKEN environment variables.")
         return
 
+    client = build_client()
+
     # Initialize database
-    db_path = os.path.join(os.getcwd(), "data", "komuzik_stats.db")
+    db_path = str(Path.cwd() / "data" / "komuzik_stats.db")
     db = Database(db_path)
     db.connect()
     logger.info("Database initialized successfully")
@@ -64,6 +69,22 @@ async def main():
 
     # Register all handlers
     BotHandlers(client, stats_repo, bot_username, download_limiter=download_limiter)
+
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown() -> None:
+        logger.info("Shutdown signal received — disconnecting…")
+        # disconnect() is sync-or-async depending on Telethon version; schedule either way.
+        result = client.disconnect()
+        if asyncio.iscoroutine(result):
+            loop.create_task(result)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+        except NotImplementedError:
+            # Windows / restricted event loops: fall back to default KeyboardInterrupt.
+            signal.signal(sig, lambda *_: _request_shutdown())
 
     # Run until disconnected
     try:

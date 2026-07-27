@@ -549,20 +549,21 @@ class StatsRepository:
         return stats
 
     def _get_date_filter(self, period: str) -> str:
-        """Get SQL date filter for the given period.
+        """Get SQL date filter for the given period (MSK calendar boundaries).
 
-        Args:
-            period: Time period ('day', 'month', 'all')
-
-        Returns:
-            SQL WHERE clause for date filtering or None
-
+        SQLite ``CURRENT_TIMESTAMP`` / stored timestamps are UTC. Playlist quotas
+        and the UI talk in Moscow time, so "за день" means since midnight MSK —
+        not a rolling 24h window from UTC ``now``.
         """
         if period == "day":
-            return "AND timestamp >= datetime('now', '-1 day')"
-        if period == "month":
-            return "AND timestamp >= datetime('now', '-1 month')"
-        return ""
+            start = datetime.now(MSK).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "month":
+            now = datetime.now(MSK)
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            return ""
+        start_utc = start.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S")
+        return f"AND timestamp >= '{start_utc}'"
 
     def _get_user_count(self, date_filter: str) -> int:
         """Get count of unique users.
@@ -1230,14 +1231,8 @@ class StatsRepository:
         self.set_bot_config_int(self.PLAYLIST_DAILY_LIMIT_KEY, n)
 
     def get_max_concurrent(self, *, default: int = 1) -> int:
-        value = self.get_bot_config_int(self.MAX_CONCURRENT_KEY, default)
-        row = self.db.fetchone(
-            "SELECT value FROM bot_config WHERE key = ?",
-            (self.MAX_CONCURRENT_KEY,),
-        )
-        if not row or row[0] is None:
-            self.set_bot_config_int(self.MAX_CONCURRENT_KEY, value)
-        return value
+        """Return configured concurrent limit; do not write on read."""
+        return self.get_bot_config_int(self.MAX_CONCURRENT_KEY, default)
 
     def set_max_concurrent(self, n: int) -> None:
         self.set_bot_config_int(self.MAX_CONCURRENT_KEY, n)
@@ -1307,16 +1302,22 @@ class StatsRepository:
             logger.error(f"Failed to increment playlist usage for {user_id}: {e}")
             raise
 
-    def effective_playlist_limit(self, user_id: int, *, is_admin: bool) -> int | None:
-        if is_admin:
+    def effective_playlist_limit(
+        self, user_id: int, *, is_admin: bool, is_unlimited: bool = False
+    ) -> int | None:
+        if is_admin or is_unlimited:
             return None
         user_limit = self.get_user_playlist_limit(user_id)
         if user_limit is not None:
             return user_limit
         return self.get_playlist_daily_limit()
 
-    def remaining_playlist_quota(self, user_id: int, *, is_admin: bool) -> int | None:
-        effective = self.effective_playlist_limit(user_id, is_admin=is_admin)
+    def remaining_playlist_quota(
+        self, user_id: int, *, is_admin: bool, is_unlimited: bool = False
+    ) -> int | None:
+        effective = self.effective_playlist_limit(
+            user_id, is_admin=is_admin, is_unlimited=is_unlimited
+        )
         if effective is None:
             return None
         usage = self.get_playlist_usage(user_id)

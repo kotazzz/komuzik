@@ -27,7 +27,7 @@ def _limiter(timeout: int = 3600):
     limiter.DOWNLOAD_TIMEOUT = timeout
     limiter.ADMIN_USER_IDS = set()
     limiter.UNLIMITED_USER_IDS = set()
-    limiter._yaml_concurrent = 1
+    limiter.yaml_concurrent = 1
     limiter._stats = None
     return limiter, clock
 

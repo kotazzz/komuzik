@@ -37,7 +37,7 @@ class DownloadLimiter:
         self.config = config_loader.config if config_loader else ConfigLoader(config_path).config
         self.download_config = self.config.get("downloads", {})
 
-        self._yaml_concurrent = self.download_config.get("max_concurrent_per_user", 1)
+        self.yaml_concurrent = self.download_config.get("max_concurrent_per_user", 1)
         self._stats = stats_repo
         self._timer = timer
         self.UNLIMITED_USER_IDS = set(self.download_config.get("unlimited_user_ids", []))
@@ -58,8 +58,8 @@ class DownloadLimiter:
     def get_max_per_user(self) -> int:
         """Return effective concurrent download limit for a normal user."""
         if self._stats is None:
-            return self._yaml_concurrent
-        return self._stats.get_max_concurrent(default=self._yaml_concurrent)
+            return self.yaml_concurrent
+        return self._stats.get_max_concurrent(default=self.yaml_concurrent)
 
     @property
     def MAX_DOWNLOADS_PER_USER(self) -> int:

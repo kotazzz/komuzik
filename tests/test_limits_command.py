@@ -30,7 +30,9 @@ def test_format_limits_regular_user():
     assert "12/50" in text
     assert "осталось 38" in text
     assert "общий" in text
-    stats.effective_playlist_limit.assert_called_once_with(42, is_admin=False)
+    stats.effective_playlist_limit.assert_called_once_with(
+        42, is_admin=False, is_unlimited=False
+    )
 
 
 def test_format_limits_personal_override():
@@ -49,4 +51,6 @@ def test_format_limits_admin_unlimited():
     text = handlers._format_user_limits_message(1)
     assert "без лимита" in text
     assert "Плейлист / сутки (МСК): без лимита" in text
-    stats.effective_playlist_limit.assert_called_once_with(1, is_admin=True)
+    stats.effective_playlist_limit.assert_called_once_with(
+        1, is_admin=True, is_unlimited=True
+    )
