@@ -2,10 +2,10 @@
 
 import logging
 import uuid
+from typing import Any, cast
 
 from telethon import Button
 from telethon.tl.custom import Message
-from typing import Any, cast
 
 from ..downloaders import (
     download_youtube_audio,

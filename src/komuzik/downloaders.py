@@ -258,8 +258,7 @@ async def search_youtube(
 
     ``offset`` skips the first N hits (page 2 → offset=10 with max_results=10).
     """
-    if offset < 0:
-        offset = 0
+    offset = max(offset, 0)
     if max_results < 1:
         return []
     try:

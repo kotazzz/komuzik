@@ -5,7 +5,7 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from telethon import Button
 from telethon.tl.custom import Message
@@ -38,11 +38,9 @@ from ..playlist import find_playlist_url
 from ..search_preview import render_search_preview_async
 from ..user_errors import format_download_error
 from .common import (
-    ADMIN_PENDING,
     CALLBACK_URLS,
     REPORT_STATES,
     SEARCH_SESSIONS,
-    media_title,
 )
 
 logger = logging.getLogger(__name__)

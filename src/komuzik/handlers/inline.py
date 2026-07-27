@@ -9,7 +9,6 @@ from telethon import Button
 from telethon.errors import QueryIdInvalidError
 from telethon.tl.types import UpdateBotInlineSend
 
-from ..config import DOWNLOAD_TIMEOUT_SECONDS
 from ..downloaders import (
     download_hls_host_video,
     download_pinterest_content,
@@ -31,7 +30,13 @@ from ..inline_media import (
 from ..inline_query import ParsedInlineQuery, parse_inline_query
 from ..storage import delete_staging, stage_media
 from ..user_errors import format_download_error
-from .common import INLINE_JOBS, INLINE_SEARCH_MAX, _entity_display_name, format_ban_message, media_title
+from .common import (
+    INLINE_JOBS,
+    INLINE_SEARCH_MAX,
+    _entity_display_name,
+    format_ban_message,
+    media_title,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -2,13 +2,13 @@
 
 import logging
 import uuid
-from typing import Any, cast
+from typing import cast
 
 from telethon import Button
 from telethon.tl.custom import Message
 
 from ..config import DEFAULT_SEARCH_RESULTS, MSG_PRIVACY, MSG_START
-from ..downloaders import enrich_youtube_search_stats, search_youtube
+from ..downloaders import search_youtube
 from ..help_pages import (
     INFO_GITHUB_URL,
     INFO_TEXT,
@@ -23,9 +23,8 @@ from ..help_pages import (
     user_toc_text,
 )
 from ..i18n import t
-from ..search_preview import render_search_preview_async
 from ..stats_infographic import format_stats_caption, get_stats_image
-from .common import BOT_GROUPS_CACHE, CALLBACK_URLS, SEARCH_SESSIONS
+from .common import BOT_GROUPS_CACHE, SEARCH_SESSIONS
 
 logger = logging.getLogger(__name__)
 

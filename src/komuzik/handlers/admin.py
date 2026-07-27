@@ -18,9 +18,9 @@ from ..i18n import t
 from ..repository import format_download_history_line, format_user_label
 from .common import (
     ACTIVE_BROADCASTS,
-    ADMIN_PENDING,
     ADMIN_HISTORY_MAX,
     ADMIN_HISTORY_PAGE_SIZE,
+    ADMIN_PENDING,
     ADMIN_USERS_KIND_ANON,
     ADMIN_USERS_KIND_KNOWN,
     ADMIN_USERS_PAGE_SIZE,

@@ -42,7 +42,7 @@ ROW_H = 208
 GAP = 16
 
 
-def fmt_compact(n: int | float | None) -> str:
+def fmt_compact(n: float | None) -> str:
     """Format counts like YouTube (RU short)."""
     if n is None:
         return "—"
@@ -64,7 +64,7 @@ def fmt_compact(n: int | float | None) -> str:
     return str(value)
 
 
-def fmt_duration(seconds: int | float | None) -> str:
+def fmt_duration(seconds: float | None) -> str:
     if not seconds:
         return "0:00"
     try:

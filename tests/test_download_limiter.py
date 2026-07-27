@@ -26,4 +26,4 @@ def test_can_download_respects_db_concurrent():
 def test_get_max_per_user_without_repo_uses_yaml():
     limiter = DownloadLimiter()
     assert limiter.get_max_per_user() == limiter.yaml_concurrent
-    assert limiter.MAX_DOWNLOADS_PER_USER == limiter.get_max_per_user()
+    assert limiter.get_max_per_user() == limiter.MAX_DOWNLOADS_PER_USER

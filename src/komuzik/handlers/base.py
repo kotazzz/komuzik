@@ -17,11 +17,16 @@ from telethon import events
 from telethon.tl.custom import Message
 
 from ..download_limiter import DownloadLimiter
-from ..downloaders import DownloadTimeoutError, send_audio_content, send_image_content, send_video_content
+from ..downloaders import (
+    DownloadTimeoutError,
+    send_audio_content,
+    send_image_content,
+    send_video_content,
+)
 from ..i18n import t
 from ..repository import StatsRepository
 from ..user_errors import format_download_error
-from .common import CALLBACK_URLS, media_title
+from .common import CALLBACK_URLS, _sender_display_name, media_title
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
+from komuzik.help_pages import ADMIN_SLUGS, USER_SLUGS
 from komuzik.i18n import has_key, reload_messages, t
-from komuzik.help_pages import USER_SLUGS, ADMIN_SLUGS
 
 
 def test_t_returns_start():
