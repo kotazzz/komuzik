@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +17,11 @@ from .executors import run_render
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 300
-CACHE_VERSION = "v3"
+# Bumped when on-disk cache payload shape changes (image + frozen stats JSON).
+CACHE_VERSION = "v4"
 CACHE_DIR = Path("data/stats_cache")
+
+PERIOD_NAMES = {"day": "за день", "month": "за месяц", "all": "за всё время"}
 
 # Landscape canvas
 WIDTH = 1600
@@ -479,35 +484,92 @@ def render_stats_infographic(stats: dict[str, Any], period: str) -> Path:
     return out
 
 
-async def get_stats_image(stats: dict[str, Any], period: str) -> Path:
-    """Return cached or freshly rendered stats image for period."""
+@dataclass(frozen=True)
+class StatsImage:
+    """PNG path plus the exact stats dict that was painted onto it."""
+
+    path: Path
+    stats: dict[str, Any]
+    period: str
+
+
+def format_stats_caption(stats: dict[str, Any], period: str) -> str:
+    """Caption that mirrors the numbers on the infographic."""
+    period_name = PERIOD_NAMES.get(period, period)
+    total = int(stats.get("total_downloads") or 0)
+    ok = int(stats.get("successful_downloads") or 0)
+    success_pct = round(100 * ok / total) if total else 0
+    by_source = stats.get("by_source") or {}
+    return (
+        f"📊 Komuzik {period_name}\n"
+        f"👥 {stats.get('total_users', 0)} · "
+        f"💬 {stats.get('total_groups', 0)} · "
+        f"📥 {total} · "
+        f"✅ {success_pct}%\n"
+        f"ЛС {by_source.get('dm', 0)} · "
+        f"Inline {by_source.get('inline', 0)} · "
+        f"Группы {by_source.get('group', 0)}"
+    )
+
+
+def _cache_paths(period: str) -> tuple[Path, Path]:
+    cache_key = f"stats_{CACHE_VERSION}_{period}"
+    return CACHE_DIR / f"{cache_key}.png", CACHE_DIR / f"{cache_key}.json"
+
+
+def _read_cache(period: str) -> StatsImage | None:
+    image_path, meta_path = _cache_paths(period)
+    if not image_path.exists() or not meta_path.exists():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        age = time.time() - float(payload["ts"])
+        if age >= CACHE_TTL_SECONDS:
+            return None
+        stats = payload["stats"]
+        if not isinstance(stats, dict):
+            return None
+        return StatsImage(path=image_path, stats=stats, period=period)
+    except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_cache(period: str, image_path: Path, stats: dict[str, Any]) -> Path:
+    final, meta_path = _cache_paths(period)
+    try:
+        if final.exists():
+            final.unlink()
+        image_path.replace(final)
+    except OSError:
+        final = image_path
+    meta_path.write_text(
+        json.dumps({"ts": time.time(), "stats": stats}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # Temp renders are named stats_{period}_{unix}.png — clean leftovers.
+    for stale in CACHE_DIR.glob(f"stats_{period}_*.png"):
+        if stale.name != final.name:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    return final
+
+
+async def get_stats_image(stats: dict[str, Any], period: str) -> StatsImage:
+    """Return cached or freshly rendered stats image for period.
+
+    On a cache hit the frozen ``stats`` snapshot from render time is returned
+    together with the PNG, so the Telegram caption always matches the picture.
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_key = f"stats_{CACHE_VERSION}_{period}"
-    cache_path = CACHE_DIR / f"{cache_key}.png"
-    meta_path = CACHE_DIR / f"{cache_key}.ts"
 
     async with _lock_for(cache_key):
-        if cache_path.exists() and meta_path.exists():
-            try:
-                age = time.time() - float(meta_path.read_text().strip())
-                if age < CACHE_TTL_SECONDS:
-                    return cache_path
-            except (ValueError, OSError):
-                pass
+        cached = _read_cache(period)
+        if cached is not None:
+            return cached
 
         rendered = await run_render(render_stats_infographic, stats, period)
-        final = CACHE_DIR / f"{cache_key}.png"
-        try:
-            if final.exists():
-                final.unlink()
-            rendered.replace(final)
-        except OSError:
-            final = rendered
-        meta_path.write_text(str(time.time()))
-        for stale in CACHE_DIR.glob(f"stats_*_{period}_*.png"):
-            if stale.name != final.name:
-                try:
-                    stale.unlink()
-                except OSError:
-                    pass
-        return final
+        final = _write_cache(period, rendered, stats)
+        return StatsImage(path=final, stats=stats, period=period)

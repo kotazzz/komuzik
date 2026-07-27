@@ -89,7 +89,7 @@ from .playlist import (
 from .repository import StatsRepository, format_download_history_line, format_user_label
 from .search_preview import render_search_preview_async
 from .state import TTLCache
-from .stats_infographic import get_stats_image
+from .stats_infographic import format_stats_caption, get_stats_image
 from .storage import PartialCopyError, copy_messages_to_chat, delete_staging, stage_media
 from .user_errors import format_download_error
 
@@ -127,6 +127,10 @@ SEARCH_SESSIONS: TTLCache[str, dict[str, Any]] = TTLCache(
 # Active /post broadcasts keyed by admin user id — allows the cancel button
 # to flip cancel_requested without racing a second concurrent broadcast.
 ACTIVE_BROADCASTS: dict[int, BroadcastControl] = {}
+# Counting groups walks every dialog; cache for the same TTL as the infographic.
+BOT_GROUPS_CACHE: TTLCache[str, int] = TTLCache(
+    maxsize=1, ttl=5 * 60, sliding=False, name="bot_groups"
+)
 CallbackHandler = Callable[[Any, str], Awaitable[None]]
 
 
@@ -567,7 +571,10 @@ class BotHandlers:
         await event.respond(self._format_user_limits_message(user_id), link_preview=False)
 
     async def _count_bot_groups(self) -> int:
-        """Count groups/supergroups the bot is currently in."""
+        """Count groups/supergroups the bot is currently in (cached ~5 min)."""
+        cached = BOT_GROUPS_CACHE.get("count")
+        if cached is not None:
+            return cached
         count = 0
         try:
             async for dialog in self.client.iter_dialogs():
@@ -575,6 +582,8 @@ class BotHandlers:
                     count += 1
         except Exception as e:
             logger.error(f"Failed to count bot groups: {e}")
+            return count
+        BOT_GROUPS_CACHE["count"] = count
         return count
 
     async def settings_handler(self, event: Message):
@@ -2139,25 +2148,11 @@ class BotHandlers:
         try:
             stats = self.stats.get_statistics(period)
             stats["total_groups"] = await self._count_bot_groups()
-            period_names = {"day": "за день", "month": "за месяц", "all": "за всё время"}
-            period_name = period_names.get(period, period)
 
-            image_path = await get_stats_image(stats, period)
-
-            total = int(stats.get("total_downloads") or 0)
-            ok = int(stats.get("successful_downloads") or 0)
-            success_pct = round(100 * ok / total) if total else 0
-            by_source = stats.get("by_source") or {}
-            caption = (
-                f"📊 Komuzik {period_name}\n"
-                f"👥 {stats.get('total_users', 0)} · "
-                f"💬 {stats.get('total_groups', 0)} · "
-                f"📥 {total} · "
-                f"✅ {success_pct}%\n"
-                f"ЛС {by_source.get('dm', 0)} · "
-                f"Inline {by_source.get('inline', 0)} · "
-                f"Группы {by_source.get('group', 0)}"
-            )
+            image = await get_stats_image(stats, period)
+            # Caption must use the same snapshot the PNG was drawn from —
+            # otherwise a cache hit shows stale art next to a fresh caption.
+            caption = format_stats_caption(image.stats, image.period)
 
             buttons = [
                 [
@@ -2169,9 +2164,9 @@ class BotHandlers:
 
             # Prefer editing current message into a photo; fall back to new message.
             try:
-                await event.edit(caption, file=str(image_path), buttons=buttons)
+                await event.edit(caption, file=str(image.path), buttons=buttons)
             except Exception:
-                await event.respond(caption, file=str(image_path), buttons=buttons)
+                await event.respond(caption, file=str(image.path), buttons=buttons)
                 try:
                     await event.delete()
                 except Exception:
