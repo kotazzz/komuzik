@@ -44,11 +44,14 @@ RUN chmod +x entrypoint.sh \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin komuzik \
     && chown -R komuzik:komuzik /app /tmp/komuzik
 
+# uv run must not sync: the image already has prod deps, and the
+# container network often cannot reach PyPI for the dev group.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
     HOME=/home/komuzik \
     TMPDIR=/tmp/komuzik \
-    UV_CACHE_DIR=/tmp/komuzik/uv-cache
+    UV_CACHE_DIR=/tmp/komuzik/uv-cache \
+    UV_NO_SYNC=1
 
 USER komuzik
 
