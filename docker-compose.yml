@@ -4,6 +4,10 @@ services:
     container_name: komuzik_bot_app
     env_file:
       - .env
+    environment:
+      UV_NO_SYNC: "1"
+    # Bridge NAT on the deploy host drops outbound from new containers.
+    network_mode: host
     restart: unless-stopped
     volumes:
       - ./session:/app/session
