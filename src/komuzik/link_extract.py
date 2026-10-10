@@ -9,7 +9,11 @@ from .config import (
     HLS_HOST_REGEX,
     PINTEREST_REGEX,
     TIKTOK_REGEX,
+    TWITCH_CLIP_REGEX,
+    TWITCH_VOD_REGEX,
     TWITTER_REGEX,
+    VK_VIDEO_REGEX,
+    YANDEX_MUSIC_REGEX,
 )
 
 # Trailing junk users often paste after a URL.
@@ -40,7 +44,7 @@ class ParsedLink:
     """One media URL found in user text."""
 
     url: str
-    platform: str  # youtube | tiktok | twitter | pinterest | hls_host
+    platform: str  # youtube | tiktok | twitter | pinterest | hls_host | twitch | vk | yandex
 
 
 _PLATFORM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -49,14 +53,23 @@ _PLATFORM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("twitter", TWITTER_REGEX),
     ("pinterest", PINTEREST_REGEX),
     ("hls_host", HLS_HOST_REGEX),
+    ("twitch", TWITCH_CLIP_REGEX),
+    ("twitch", TWITCH_VOD_REGEX),
+    ("vk", VK_VIDEO_REGEX),
+    ("yandex", YANDEX_MUSIC_REGEX),
 )
 
 
-def _normalize_url(raw: str, _platform: str) -> str:
+def ensure_http_url(raw: str) -> str:
+    """Strip trailing punctuation and add https:// when the scheme is missing."""
     cleaned = _TRAILING_PUNCT.sub("", raw.strip())
     if not cleaned.startswith(("http://", "https://")):
         cleaned = "https://" + cleaned
     return cleaned
+
+
+def _normalize_url(raw: str, _platform: str) -> str:
+    return ensure_http_url(raw)
 
 
 def _is_native_playlist_url(url: str) -> bool:

@@ -70,6 +70,14 @@ def _entity_display_name(entity) -> str | None:
     return _sender_display_name(entity)
 
 
+def media_kind_from_metadata(metadata: dict | None, default: str = "video") -> str:
+    """Map downloader metadata to a send kind."""
+    kind = (metadata or {}).get("content_type")
+    if kind in {"photo", "video", "audio", "album"}:
+        return str(kind)
+    return default
+
+
 def media_title(metadata: dict | None) -> str | None:
     if not metadata:
         return None

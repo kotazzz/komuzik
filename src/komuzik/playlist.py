@@ -55,6 +55,9 @@ PLATFORM_EMOJI = {
     "twitter": "🐦",
     "pinterest": "📌",
     "hls_host": "🎬",
+    "twitch": "🟣",
+    "vk": "📺",
+    "yandex": "🎶",
 }
 
 

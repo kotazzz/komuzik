@@ -48,6 +48,9 @@ class ChatSettings:
     allow_tiktok: bool = True
     allow_twitter: bool = True
     allow_pinterest: bool = True
+    allow_twitch: bool = True
+    allow_vk: bool = True
+    allow_yandex: bool = True
     show_bot_caption: bool = True
     show_title: bool = True
     default_quality: str = "720p"
@@ -62,6 +65,12 @@ class ChatSettings:
             return self.allow_twitter
         if platform == "pinterest":
             return self.allow_pinterest
+        if platform == "twitch":
+            return self.allow_twitch
+        if platform == "vk":
+            return self.allow_vk
+        if platform == "yandex":
+            return self.allow_yandex
         return True
 
 
@@ -70,6 +79,9 @@ CHAT_SETTING_KEYS = {
     "allow_tiktok",
     "allow_twitter",
     "allow_pinterest",
+    "allow_twitch",
+    "allow_vk",
+    "allow_yandex",
     "show_bot_caption",
     "show_title",
 }
@@ -304,6 +316,7 @@ class StatsRepository:
         source: str = "dm",
         url: str | None = None,
         title: str | None = None,
+        platform: str = "youtube",
     ):
         """Track an audio download event.
 
@@ -323,7 +336,7 @@ class StatsRepository:
             user_id,
             username,
             video_format=audio_quality,
-            platform="youtube",
+            platform=platform,
             success=success,
             error_message=error_message,
             source=source,
@@ -1048,6 +1061,7 @@ class StatsRepository:
         try:
             row = self.db.fetchone(
                 """SELECT allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
+                          allow_twitch, allow_vk, allow_yandex,
                           show_bot_caption, show_title, default_quality
                    FROM chat_settings WHERE chat_id = ?""",
                 (chat_id,),
@@ -1060,9 +1074,12 @@ class StatsRepository:
                 allow_tiktok=bool(row[1]),
                 allow_twitter=bool(row[2]),
                 allow_pinterest=bool(row[3]),
-                show_bot_caption=bool(row[4]),
-                show_title=bool(row[5]),
-                default_quality=_normalize_default_quality(row[6]),
+                allow_twitch=bool(row[4]),
+                allow_vk=bool(row[5]),
+                allow_yandex=bool(row[6]),
+                show_bot_caption=bool(row[7]),
+                show_title=bool(row[8]),
+                default_quality=_normalize_default_quality(row[9]),
             )
         except Exception as e:
             logger.error(f"Failed to get chat settings for {chat_id}: {e}")
@@ -1076,6 +1093,9 @@ class StatsRepository:
             allow_tiktok=settings.allow_tiktok,
             allow_twitter=settings.allow_twitter,
             allow_pinterest=settings.allow_pinterest,
+            allow_twitch=settings.allow_twitch,
+            allow_vk=settings.allow_vk,
+            allow_yandex=settings.allow_yandex,
             show_bot_caption=settings.show_bot_caption,
             show_title=settings.show_title,
             default_quality=quality,
@@ -1084,13 +1104,17 @@ class StatsRepository:
             self.db.execute(
                 """INSERT INTO chat_settings (
                        chat_id, allow_youtube, allow_tiktok, allow_twitter, allow_pinterest,
+                       allow_twitch, allow_vk, allow_yandex,
                        show_bot_caption, show_title, default_quality, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(chat_id) DO UPDATE SET
                      allow_youtube = excluded.allow_youtube,
                      allow_tiktok = excluded.allow_tiktok,
                      allow_twitter = excluded.allow_twitter,
                      allow_pinterest = excluded.allow_pinterest,
+                     allow_twitch = excluded.allow_twitch,
+                     allow_vk = excluded.allow_vk,
+                     allow_yandex = excluded.allow_yandex,
                      show_bot_caption = excluded.show_bot_caption,
                      show_title = excluded.show_title,
                      default_quality = excluded.default_quality,
@@ -1101,6 +1125,9 @@ class StatsRepository:
                     int(saved.allow_tiktok),
                     int(saved.allow_twitter),
                     int(saved.allow_pinterest),
+                    int(saved.allow_twitch),
+                    int(saved.allow_vk),
+                    int(saved.allow_yandex),
                     int(saved.show_bot_caption),
                     int(saved.show_title),
                     saved.default_quality,
@@ -1121,6 +1148,9 @@ class StatsRepository:
             "allow_tiktok": current.allow_tiktok,
             "allow_twitter": current.allow_twitter,
             "allow_pinterest": current.allow_pinterest,
+            "allow_twitch": current.allow_twitch,
+            "allow_vk": current.allow_vk,
+            "allow_yandex": current.allow_yandex,
             "show_bot_caption": current.show_bot_caption,
             "show_title": current.show_title,
             "default_quality": current.default_quality,
@@ -1139,6 +1169,9 @@ class StatsRepository:
                 allow_tiktok=current.allow_tiktok,
                 allow_twitter=current.allow_twitter,
                 allow_pinterest=current.allow_pinterest,
+                allow_twitch=current.allow_twitch,
+                allow_vk=current.allow_vk,
+                allow_yandex=current.allow_yandex,
                 show_bot_caption=current.show_bot_caption,
                 show_title=current.show_title,
                 default_quality=quality,

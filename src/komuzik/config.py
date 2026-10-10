@@ -29,6 +29,39 @@ TWITTER_REGEX = re.compile(r"(https?://)?(www\.|mobile\.)?(twitter\.com|x\.com)/
 PINTEREST_REGEX = re.compile(
     r"(https?://)?(www\.|[a-z]{2}\.)?(pinterest\.com/pin/|pinterest\.co\.uk/pin/|pin\.it/)(\S+)"
 )
+# Clips and VODs. Channel pages are matched separately so a bare channel is not a VOD.
+TWITCH_CLIP_REGEX = re.compile(
+    r"(https?://)?(?:clips\.twitch\.tv/[\w-]+|(?:(?:www|m|go)\.)?twitch\.tv/(?:[\w-]+/)?clip/[\w-]+)",
+    re.IGNORECASE,
+)
+TWITCH_VOD_REGEX = re.compile(
+    r"(https?://)?(?:"
+    r"(?:(?:www|m|go)\.)?twitch\.tv/(?:[\w-]+/)?videos/\d+(?:\?[^\s#]*)?"
+    r"|(?:(?:www|m|go)\.)?twitch\.tv/[\w-]+/v(?:ideo)?/\d+(?:\?[^\s#]*)?"
+    r"|player\.twitch\.tv/\?[^\s#]*\bvideo=v?\d+[^\s#]*"
+    r")",
+    re.IGNORECASE,
+)
+# One path segment only: twitch.tv/name, not twitch.tv/name/clip/… or /videos/…
+TWITCH_CHANNEL_REGEX = re.compile(
+    r"(https?://)?(?:(?:www|m|go)\.)?twitch\.tv/(?!videos/|clip/)([\w-]+)/?(?=[?#\s]|$)",
+    re.IGNORECASE,
+)
+VK_VIDEO_REGEX = re.compile(
+    r"(https?://)?(?:"
+    r"(?:(?:m|www|new|vksport)\.)?vk\.(?:com|ru)/[^\s]*?(?:video|clip)-?\d+_\d+"
+    r"|(?:www\.)?vkvideo\.ru/[^\s]*?(?:video|clip)-?\d+_\d+"
+    r")",
+    re.IGNORECASE,
+)
+YANDEX_MUSIC_TRACK_REGEX = re.compile(
+    r"(https?://)?music\.yandex\.(?:ru|com|by|kz|ua)/album/\d+/track/\d+",
+    re.IGNORECASE,
+)
+YANDEX_MUSIC_REGEX = re.compile(
+    r"(https?://)?music\.yandex\.(?:ru|com|by|kz|ua)/\S+",
+    re.IGNORECASE,
+)
 HLS_HOST_REGEX = re.compile(
     r"(https?://)?(www\.)?murrtube\.net/v/([A-Za-z0-9_-]+)"
 )
@@ -87,6 +120,13 @@ TIKTOK_SETTINGS = _config.get_section("tiktok")
 TIKTOK_MAX_RETRIES = TIKTOK_SETTINGS.get("max_retries", 3)
 TIKTOK_RETRY_BACKOFF = TIKTOK_SETTINGS.get("retry_backoff_base", 2)
 
+# ============= Twitch Settings =============
+TWITCH_SETTINGS = _config.get_section("twitch")
+
+# Public VODs are HLS and often multi-hour. Refuse anything longer than this
+# when the duration is known, and refuse a VOD whose length we cannot see.
+TWITCH_MAX_DURATION_SECONDS = int(TWITCH_SETTINGS.get("max_duration_seconds", 1800))
+
 # ============= Twitter/X Settings =============
 TWITTER_SETTINGS = _config.get_section("twitter")
 
@@ -109,6 +149,16 @@ MSG_PRIVACY = t("privacy")
 TIKTOK_ERROR_MESSAGE = t("errors.tiktok")
 TWITTER_ERROR_MESSAGE = t("errors.twitter")
 PINTEREST_ERROR_MESSAGE = t("errors.pinterest")
+TWITCH_ERROR_MESSAGE = t("errors.twitch")
+TWITCH_LIVE_MESSAGE = t("errors.twitch_live")
+TWITCH_TOO_LONG_MESSAGE = t(
+    "errors.twitch_too_long", minutes=max(1, TWITCH_MAX_DURATION_SECONDS // 60)
+)
+VK_ERROR_MESSAGE = t("errors.vk")
+VK_LIVE_MESSAGE = t("errors.vk_live")
+YANDEX_ERROR_MESSAGE = t("errors.yandex")
+YANDEX_TRACK_ONLY_MESSAGE = t("errors.yandex_track_only")
+YANDEX_CAPTCHA_MESSAGE = t("errors.yandex_captcha")
 HLS_HOST_ERROR_MESSAGE = t("errors.download")
 HLS_HOST_MAX_RETRIES = 3
 HLS_HOST_RETRY_BACKOFF = 2

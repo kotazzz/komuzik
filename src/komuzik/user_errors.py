@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .downloaders import DownloadTimeoutError, DownloadTooLargeError
+from .downloaders import DownloadRejectedError, DownloadTimeoutError, DownloadTooLargeError
 from .i18n import t
 
 # Substrings that mean login / age-gate / cookies rather than a bot bug.
@@ -50,6 +50,8 @@ def format_download_error(error: BaseException | str, *, context: str | None = N
     Access / 401 / 403 failures get a short standalone message (no raw yt-dlp dump).
     Other errors keep optional ``context`` prefix plus the original text.
     """
+    if isinstance(error, DownloadRejectedError):
+        return str(error)
     if isinstance(error, DownloadTimeoutError):
         return t("errors.download_timeout")
     if isinstance(error, DownloadTooLargeError):

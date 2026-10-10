@@ -286,6 +286,9 @@ class UserCommandsMixin:
                 "settings.chat_body",
                 youtube=state(settings.allow_youtube),
                 tiktok=state(settings.allow_tiktok),
+                twitch=state(settings.allow_twitch),
+                vk=state(settings.allow_vk),
+                yandex=state(settings.allow_yandex),
                 twitter=state(settings.allow_twitter),
                 pinterest=state(settings.allow_pinterest),
                 bot_caption=state(settings.show_bot_caption),
@@ -305,6 +308,15 @@ class UserCommandsMixin:
                     label("YouTube", settings.allow_youtube), data="chatset_allow_youtube"
                 ),
                 Button.inline(label("TikTok", settings.allow_tiktok), data="chatset_allow_tiktok"),
+            ],
+            [
+                Button.inline(label("Twitch", settings.allow_twitch), data="chatset_allow_twitch"),
+                Button.inline(label("ВК", settings.allow_vk), data="chatset_allow_vk"),
+            ],
+            [
+                Button.inline(
+                    label("Яндекс Музыка", settings.allow_yandex), data="chatset_allow_yandex"
+                ),
             ],
             [
                 Button.inline(
@@ -566,6 +578,9 @@ class UserCommandsMixin:
             "allow_tiktok",
             "allow_twitter",
             "allow_pinterest",
+            "allow_twitch",
+            "allow_vk",
+            "allow_yandex",
             "show_bot_caption",
             "show_title",
         }:

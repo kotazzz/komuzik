@@ -12,7 +12,10 @@ from ..downloaders import (
     download_hls_host_video,
     download_pinterest_content,
     download_tiktok_video,
+    download_twitch_video,
     download_twitter_video,
+    download_vk_video,
+    download_yandex_music,
     download_youtube_audio,
     download_youtube_video,
     enrich_youtube_search_stats,
@@ -20,6 +23,7 @@ from ..downloaders import (
     send_audio_content,
     send_image_content,
     send_playlist_album,
+    send_tiktok_photos,
     send_video_content,
 )
 from ..i18n import t
@@ -778,7 +782,19 @@ class PlaylistMixin:
             return path, meta, "video"
         if platform == "tiktok":
             path, meta = await self._bounded(download_tiktok_video(entry.url))
+            kind = meta.get("content_type")
+            if kind not in {"photo", "video", "audio", "album"}:
+                kind = "video"
+            return path, meta, str(kind)
+        if platform == "twitch":
+            path, meta = await self._bounded(download_twitch_video(entry.url))
             return path, meta, "video"
+        if platform == "vk":
+            path, meta = await self._bounded(download_vk_video(entry.url))
+            return path, meta, "video"
+        if platform == "yandex":
+            path, meta = await self._bounded(download_yandex_music(entry.url))
+            return path, meta, "audio"
         if platform == "twitter":
             path, meta = await self._bounded(download_twitter_video(entry.url))
             kind = "photo" if meta.get("content_type") == "photo" else "video"
@@ -829,6 +845,45 @@ class PlaylistMixin:
                 source="dm",
                 url=entry.url,
                 title=title,
+            )
+            return
+        if platform == "twitch":
+            self.stats.track_video_download(
+                user_id,
+                "best",
+                "twitch",
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "vk":
+            self.stats.track_video_download(
+                user_id,
+                "best",
+                "vk",
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+            )
+            return
+        if platform == "yandex":
+            self.stats.track_audio_download(
+                user_id,
+                quality,
+                username,
+                success=success,
+                error_message=error_message,
+                source="dm",
+                url=entry.url,
+                title=title,
+                platform="yandex",
             )
             return
         if platform == "tiktok":
@@ -891,6 +946,16 @@ class PlaylistMixin:
                 return await self.client.send_message(self.chat_id, *args, **kwargs)
 
         shim = _Shim(self.client, chat_id)
+        if media_kind == "album":
+            await send_tiktok_photos(
+                self.client,
+                int(chat_id),
+                metadata,
+                self.bot_username,
+                show_bot_caption=bool(caption_kw.get("show_bot_caption", True)),
+                show_title=bool(caption_kw.get("show_title", True)),
+            )
+            return
         if media_kind == "audio":
             await send_audio_content(
                 shim, file_path, metadata, self.bot_username, **caption_kw

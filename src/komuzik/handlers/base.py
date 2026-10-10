@@ -22,6 +22,7 @@ from ..downloaders import (
     DownloadTimeoutError,
     send_audio_content,
     send_image_content,
+    send_tiktok_photos,
     send_video_content,
 )
 from ..i18n import t
@@ -336,7 +337,24 @@ class BotHandlersBase:
     async def _send_media_by_content_type(
         self, event, file_path: str, metadata: dict, **caption_kw: Any
     ) -> None:
-        """Send photo or video depending on downloader metadata."""
+        """Send photo, album or video depending on downloader metadata."""
+        if metadata.get("content_type") == "album":
+            reply_to = caption_kw.get("reply_to")
+            await send_tiktok_photos(
+                self.client,
+                int(event.chat_id),
+                metadata,
+                self.bot_username,
+                show_bot_caption=bool(caption_kw.get("show_bot_caption", True)),
+                show_title=bool(caption_kw.get("show_title", True)),
+                reply_to=reply_to if isinstance(reply_to, int) else None,
+            )
+            return
+        if metadata.get("content_type") == "audio":
+            await send_audio_content(
+                event, file_path, metadata, self.bot_username, **caption_kw
+            )
+            return
         if metadata.get("content_type") == "photo":
             await send_image_content(
                 event,

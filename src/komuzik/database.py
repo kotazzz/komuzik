@@ -129,6 +129,9 @@ class Database:
                 allow_tiktok INTEGER NOT NULL DEFAULT 1,
                 allow_twitter INTEGER NOT NULL DEFAULT 1,
                 allow_pinterest INTEGER NOT NULL DEFAULT 1,
+                allow_twitch INTEGER NOT NULL DEFAULT 1,
+                allow_vk INTEGER NOT NULL DEFAULT 1,
+                allow_yandex INTEGER NOT NULL DEFAULT 1,
                 show_bot_caption INTEGER NOT NULL DEFAULT 1,
                 show_title INTEGER NOT NULL DEFAULT 1,
                 default_quality TEXT NOT NULL DEFAULT '720p',
@@ -171,6 +174,9 @@ class Database:
 
         self._ensure_column(cursor, "user_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
         self._ensure_column(cursor, "chat_settings", "default_quality", "TEXT NOT NULL DEFAULT '720p'")
+        self._ensure_column(cursor, "chat_settings", "allow_twitch", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column(cursor, "chat_settings", "allow_vk", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column(cursor, "chat_settings", "allow_yandex", "INTEGER NOT NULL DEFAULT 1")
         self._ensure_column(cursor, "user_settings", "last_mode", "TEXT")
         self._ensure_column(cursor, "user_settings", "last_quality", "TEXT")
         self._ensure_column(cursor, "statistics", "url", "TEXT")

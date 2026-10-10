@@ -13,10 +13,14 @@ from ..downloaders import (
     download_hls_host_video,
     download_pinterest_content,
     download_tiktok_video,
+    download_twitch_video,
     download_twitter_video,
+    download_vk_video,
+    download_yandex_music,
     download_youtube_audio,
     download_youtube_video,
     search_youtube,
+    send_tiktok_photos,
 )
 from ..i18n import t
 from ..inline_media import (
@@ -35,6 +39,7 @@ from .common import (
     INLINE_SEARCH_MAX,
     _entity_display_name,
     format_ban_message,
+    media_kind_from_metadata,
     media_title,
 )
 
@@ -278,6 +283,11 @@ class InlineMixin:
         try:
             await edit_inline_text(self.client, inline_msg_id, t("common.loading"))
             file_path, metadata, media_kind = await self._download_for_inline(parsed)
+            if media_kind == "album":
+                await self._deliver_inline_album(
+                    inline_msg_id, user_id, username, parsed, metadata
+                )
+                return
             storage_chat_id = self.stats.get_storage_chat_id()
             if storage_chat_id is not None:
                 staging_msg = await stage_media(
@@ -344,6 +354,45 @@ class InlineMixin:
                 self._cleanup_download_file(file_path)
             await self.download_limiter.finish_download(user_id, download_id)
 
+    async def _deliver_inline_album(
+        self,
+        inline_msg_id,
+        user_id: int,
+        username: str | None,
+        parsed: ParsedInlineQuery,
+        metadata: dict,
+    ) -> None:
+        """Photo series cannot replace one inline message, so the album goes to PM."""
+        try:
+            await send_tiktok_photos(
+                self.client,
+                user_id,
+                metadata,
+                self.bot_username,
+                **self._caption_kwargs(user_id),
+            )
+        except Exception as e:
+            if is_pm_unavailable_error(e):
+                await edit_inline_text(self.client, inline_msg_id, PM_UNAVAILABLE_MESSAGE)
+                self._track_inline_download(
+                    parsed,
+                    user_id,
+                    username,
+                    success=False,
+                    error_message=str(e),
+                )
+                return
+            raise
+        count = len(metadata.get("album_files") or [])
+        await edit_inline_text(
+            self.client,
+            inline_msg_id,
+            t("download.tiktok.album_inline", count=count),
+        )
+        self._track_inline_download(
+            parsed, user_id, username, success=True, metadata=metadata
+        )
+
     async def _download_for_inline(self, parsed: ParsedInlineQuery) -> tuple[str, dict, str]:
         """Download media for an inline job. Returns (path, metadata, media_kind)."""
         if parsed.platform == "youtube" and parsed.mode == "audio":
@@ -361,17 +410,27 @@ class InlineMixin:
 
         if parsed.platform == "tiktok":
             file_path, metadata = await self._bounded(download_tiktok_video(parsed.url))
+            return file_path, metadata, media_kind_from_metadata(metadata, "video")
+
+        if parsed.platform == "twitch":
+            file_path, metadata = await self._bounded(download_twitch_video(parsed.url))
             return file_path, metadata, "video"
+
+        if parsed.platform == "vk":
+            file_path, metadata = await self._bounded(download_vk_video(parsed.url))
+            return file_path, metadata, "video"
+
+        if parsed.platform == "yandex":
+            file_path, metadata = await self._bounded(download_yandex_music(parsed.url))
+            return file_path, metadata, "audio"
 
         if parsed.platform == "twitter":
             file_path, metadata = await self._bounded(download_twitter_video(parsed.url))
-            kind = "photo" if metadata.get("content_type") == "photo" else "video"
-            return file_path, metadata, kind
+            return file_path, metadata, media_kind_from_metadata(metadata, "video")
 
         if parsed.platform == "pinterest":
             file_path, metadata = await self._bounded(download_pinterest_content(parsed.url))
-            kind = "photo" if metadata.get("content_type") == "photo" else "video"
-            return file_path, metadata, kind
+            return file_path, metadata, media_kind_from_metadata(metadata, "video")
 
         if parsed.platform == "hls_host":
             file_path, metadata = await self._bounded(download_hls_host_video(parsed.url))
@@ -458,6 +517,42 @@ class InlineMixin:
                 source=source,
                 url=parsed.url,
                 title=title,
+            )
+        elif parsed.platform == "twitch":
+            self.stats.track_video_download(
+                user_id,
+                parsed.quality,
+                "twitch",
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+                url=parsed.url,
+                title=title,
+            )
+        elif parsed.platform == "vk":
+            self.stats.track_video_download(
+                user_id,
+                parsed.quality,
+                "vk",
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+                url=parsed.url,
+                title=title,
+            )
+        elif parsed.platform == "yandex":
+            self.stats.track_audio_download(
+                user_id,
+                parsed.quality,
+                username,
+                success=success,
+                error_message=error_message,
+                source=source,
+                url=parsed.url,
+                title=title,
+                platform="yandex",
             )
         elif parsed.platform == "twitter":
             self.stats.track_twitter_download(

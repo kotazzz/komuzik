@@ -24,8 +24,11 @@ def test_platform_handlers_delegate_to_shared_pipeline():
     asyncio.run(handlers._handle_youtube_shorts(event, url))
     asyncio.run(handlers._handle_twitter(event, url))
     asyncio.run(handlers._handle_pinterest(event, url))
+    asyncio.run(handlers._handle_twitch(event, url))
+    asyncio.run(handlers._handle_vk(event, url))
+    asyncio.run(handlers._handle_yandex(event, url))
 
-    assert handlers._download_and_send_content.await_count == 5
+    assert handlers._download_and_send_content.await_count == 8
 
     calls = handlers._download_and_send_content.await_args_list
     kwargs_labels = [c.kwargs["log_label"] for c in calls]
@@ -35,6 +38,9 @@ def test_platform_handlers_delegate_to_shared_pipeline():
         "YouTube Short",
         "Twitter content",
         "Pinterest content",
+        "Twitch video",
+        "VK video",
+        "Yandex Music",
     ]
 
     # Status / error strings stay platform-specific.
@@ -44,4 +50,7 @@ def test_platform_handlers_delegate_to_shared_pipeline():
     assert "Pinterest" in statuses[4]
 
     assert calls[4].kwargs["action"] == "document"
+    assert calls[7].kwargs["action"] == "audio"
     assert all(c.kwargs["action"] == "video" for c in calls[:4])
+    assert calls[5].kwargs["action"] == "video"
+    assert calls[6].kwargs["action"] == "video"

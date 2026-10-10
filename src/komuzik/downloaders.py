@@ -22,6 +22,7 @@ from telethon.tl.types import (
 )
 from yt_dlp.utils import DownloadError
 
+from .captions import build_media_caption
 from .config import (
     AUDIO_BITRATE,
     AUDIO_FORMAT,
@@ -39,10 +40,23 @@ from .config import (
     TIKTOK_ERROR_MESSAGE,
     TIKTOK_MAX_RETRIES,
     TIKTOK_RETRY_BACKOFF,
+    TWITCH_CHANNEL_REGEX,
+    TWITCH_CLIP_REGEX,
+    TWITCH_ERROR_MESSAGE,
+    TWITCH_LIVE_MESSAGE,
+    TWITCH_MAX_DURATION_SECONDS,
+    TWITCH_TOO_LONG_MESSAGE,
+    TWITCH_VOD_REGEX,
     TWITTER_ERROR_MESSAGE,
     TWITTER_MAX_RETRIES,
     TWITTER_RETRY_BACKOFF,
     VIDEO_FALLBACK_QUALITIES,
+    VK_ERROR_MESSAGE,
+    VK_LIVE_MESSAGE,
+    YANDEX_CAPTCHA_MESSAGE,
+    YANDEX_ERROR_MESSAGE,
+    YANDEX_MUSIC_TRACK_REGEX,
+    YANDEX_TRACK_ONLY_MESSAGE,
     YDLP_BASE_OPTS,
 )
 from .executors import enrich_semaphore, run_download, run_media
@@ -62,6 +76,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 class DownloadTooLargeError(Exception):
     """Raised when a media file exceeds the configured size limit."""
+
+
+class DownloadRejectedError(Exception):
+    """Raised when we refuse a link before downloading.
+
+    The message is already localized and should be shown as-is.
+    """
 
 
 class DownloadTimeoutError(Exception):
@@ -104,6 +125,22 @@ _INCOMPLETE_SUFFIXES = (
     ".aria2",
 )
 _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_AUDIO_SUFFIXES = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav")
+_VIDEO_EXTS = {"mp4", "webm", "mkv", "mov", "m4v"}
+_NON_VIDEO_EXTS = {
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "mp3",
+    "m4a",
+    "aac",
+    "ogg",
+    "opus",
+    "wav",
+}
+_ALBUM_CHUNK = 10
 
 
 def _find_downloaded_file(
@@ -774,6 +811,269 @@ async def download_youtube_audio(url: str, quality: str = "high") -> tuple[str, 
         raise
 
 
+def info_has_video(info: Mapping[str, Any]) -> bool:
+    """True when yt-dlp metadata contains a real video stream, not only audio."""
+    formats = info.get("formats")
+    if isinstance(formats, list) and formats:
+        return any(_format_is_video(fmt) for fmt in formats if isinstance(fmt, Mapping))
+    ext = str(info.get("ext") or "").lower()
+    return ext in _VIDEO_EXTS
+
+
+def _format_is_video(fmt: Mapping[str, Any]) -> bool:
+    vcodec = fmt.get("vcodec")
+    if not isinstance(vcodec, str) or vcodec in {"none", "images"}:
+        return False
+    ext = str(fmt.get("ext") or "").lower()
+    return ext not in _NON_VIDEO_EXTS
+
+
+def classify_gallery_files(paths: list[str]) -> tuple[list[str], str | None]:
+    """Split a TikTok gallery-dl folder into ordered images and one audio file."""
+    images: list[str] = []
+    audios: list[str] = []
+    for path in paths:
+        lower = path.lower()
+        if any(lower.endswith(suffix) for suffix in _INCOMPLETE_SUFFIXES):
+            continue
+        if lower.endswith(_IMAGE_SUFFIXES):
+            images.append(path)
+        elif lower.endswith(_AUDIO_SUFFIXES):
+            audios.append(path)
+    images.sort()
+    audios.sort()
+    audio = audios[0] if audios else None
+    return images, audio
+
+
+def twitch_url_kind(url: str) -> str:
+    """Classify a Twitch URL as ``clip``, ``vod``, ``channel`` or ``other``."""
+    if TWITCH_CLIP_REGEX.search(url):
+        return "clip"
+    if TWITCH_VOD_REGEX.search(url):
+        return "vod"
+    if TWITCH_CHANNEL_REGEX.search(url):
+        return "channel"
+    return "other"
+
+
+def _tiktok_error_is_photo(error_msg: str, url: str) -> bool:
+    lowered = error_msg.lower()
+    if "/photo/" in url.lower():
+        return True
+    return "unsupported url" in lowered or "no video" in lowered
+
+
+async def _load_tiktok_photos(
+    url: str, temp_dir: str, info: Mapping[str, Any] | None
+) -> tuple[str, dict]:
+    try:
+        return await _download_tiktok_photos(url, temp_dir, info)
+    except DownloadTooLargeError:
+        raise
+    except Exception as e:
+        logger.error("TikTok photo download failed for %s: %s", url, e)
+        raise DownloadRejectedError(TIKTOK_ERROR_MESSAGE) from e
+
+
+def assess_twitch_info(
+    info: Mapping[str, Any],
+    *,
+    kind: str,
+    max_duration: int,
+) -> str | None:
+    """Return ``live`` or ``too_long`` when a Twitch extract should be refused."""
+    if info.get("is_live") is True or str(info.get("live_status") or "") in {
+        "is_live",
+        "is_upcoming",
+    }:
+        return "live"
+    seconds = 0.0
+    duration = info.get("duration")
+    if isinstance(duration, (int, float)):
+        seconds = float(duration)
+    if kind == "vod" and (seconds <= 0 or seconds > max_duration):
+        return "too_long"
+    if kind == "clip" and seconds > max_duration:
+        return "too_long"
+    return None
+
+
+def _walk_files(temp_dir: str) -> list[str]:
+    found: list[str] = []
+    for root, _dirs, files in os.walk(temp_dir):
+        for name in files:
+            found.append(os.path.join(root, name))
+    return found
+
+
+def _mp4_video_opts(temp_dir: str, format_option: str) -> dict[str, Any]:
+    return {
+        **YDLP_BASE_OPTS,
+        **_size_limit_opts(),
+        "format": format_option,
+        "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
+        "merge_output_format": "mp4",
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+            {"key": "FFmpegMetadata", "add_metadata": True},
+        ],
+        "postprocessor_args": {"ffmpeg": ["-movflags", "+faststart"]},
+    }
+
+
+def _video_metadata(info: Mapping[str, Any], probe: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "title": info.get("title") or info.get("description") or "",
+        "duration": probe.get("duration") or _safe_int(info.get("duration"), 0),
+        "width": probe.get("width") or _safe_int(info.get("width"), DEFAULT_VIDEO_WIDTH),
+        "height": probe.get("height") or _safe_int(info.get("height"), DEFAULT_VIDEO_HEIGHT),
+        "content_type": "video",
+    }
+
+
+async def _download_tiktok_photos(
+    url: str, temp_dir: str, info: Mapping[str, Any] | None
+) -> tuple[str, dict]:
+    """Download a TikTok photo post: every image, plus the music when present."""
+    _clear_temp_dir(temp_dir)
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "gallery-dl",
+                "-D",
+                temp_dir,
+                "--no-mtime",
+                "-o",
+                "directory=[]",
+                "-o",
+                "filename={num:>02}.{extension}",
+                "-o",
+                "extractor.tiktok.photos=true",
+                "-o",
+                "extractor.tiktok.audio=true",
+                "-o",
+                "extractor.tiktok.videos=false",
+                "-o",
+                "extractor.tiktok.covers=false",
+                "-o",
+                "extractor.tiktok.subtitles=false",
+                "--",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+    try:
+        result = await run_media(_run)
+    except FileNotFoundError as e:
+        raise Exception(TIKTOK_ERROR_MESSAGE) from e
+    except subprocess.TimeoutExpired as e:
+        raise Exception(TIKTOK_ERROR_MESSAGE) from e
+
+    files = _walk_files(temp_dir)
+    logger.info(
+        "TikTok gallery-dl rc=%s files=%s stderr=%s",
+        result.returncode,
+        files,
+        (result.stderr or "")[:500],
+    )
+    images, audio = classify_gallery_files(files)
+    if not images:
+        raise Exception(TIKTOK_ERROR_MESSAGE)
+
+    for path in images:
+        _ensure_file_within_limit(path, "TikTok photo")
+    if audio:
+        _ensure_file_within_limit(audio, "TikTok audio")
+
+    title = ""
+    duration = 0
+    artist = "TikTok"
+    if info:
+        title = str(info.get("title") or info.get("description") or "")
+        duration = _safe_int(info.get("duration"), 0)
+        raw_artist = info.get("artist") or info.get("creator") or info.get("uploader")
+        if isinstance(raw_artist, str) and raw_artist.strip():
+            artist = raw_artist.strip()
+
+    metadata: dict[str, Any] = {
+        "title": title,
+        "artist": artist,
+        "track": title or "TikTok",
+        "duration": duration,
+        "width": 0,
+        "height": 0,
+    }
+    if len(images) == 1 and audio is None:
+        metadata["content_type"] = "photo"
+        return images[0], metadata
+
+    metadata["content_type"] = "album"
+    metadata["album_files"] = images
+    metadata["audio_path"] = audio
+    return images[0], metadata
+
+
+async def _download_bounded_video(
+    url: str,
+    *,
+    label: str,
+    error_message: str,
+    format_option: str,
+    kind: str,
+    max_duration: int | None,
+    live_message: str,
+) -> tuple[str, dict]:
+    """Download one mp4 via yt-dlp, refusing live and over-long Twitch VODs."""
+    temp_dir = tempfile.mkdtemp()
+    cleanup_on_error = True
+    try:
+        ydl_opts = _mp4_video_opts(temp_dir, format_option)
+        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+            try:
+                info = cast(
+                    "dict[str, Any]", await run_download(ydl.extract_info, url, False)
+                )
+            except DownloadError as e:
+                _reraise_size_limit(e, label)
+                raise Exception(error_message) from e
+
+            if info.get("is_live") is True or str(info.get("live_status") or "") in {
+                "is_live",
+                "is_upcoming",
+            }:
+                raise DownloadRejectedError(live_message)
+            if max_duration is not None:
+                reason = assess_twitch_info(info, kind=kind, max_duration=max_duration)
+                if reason == "live":
+                    raise DownloadRejectedError(live_message)
+                if reason == "too_long":
+                    raise DownloadRejectedError(TWITCH_TOO_LONG_MESSAGE)
+
+            try:
+                _ensure_size_within_limit(_get_expected_size(info), label)
+                await run_download(ydl.download, [url])
+            except DownloadError as e:
+                _reraise_size_limit(e, label)
+                raise Exception(error_message) from e
+
+        file_path = _find_downloaded_file(temp_dir, expected_extension="mp4")
+        file_path, probe = await _ensure_telegram_ios_video(file_path)
+        _ensure_file_within_limit(file_path, label)
+        cleanup_on_error = False
+        return file_path, _video_metadata(info, probe)
+    except (DownloadTooLargeError, DownloadRejectedError):
+        raise
+    finally:
+        if cleanup_on_error and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+
 async def download_tiktok_video(url: str, max_retries: int | None = None) -> tuple[str, dict]:
     """Download a TikTok video and return the path and metadata.
 
@@ -806,6 +1106,10 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 info = cast(
                     "dict[str, Any]", await run_download(ydl.extract_info, url, False)
                 )
+                if "/photo/" in url.lower() or not info_has_video(info):
+                    file_path, metadata = await _load_tiktok_photos(url, temp_dir, info)
+                    cleanup_on_error = False
+                    return file_path, metadata
                 _ensure_size_within_limit(_get_expected_size(info), "TikTok video")
                 await run_download(ydl.download, [url])
 
@@ -834,6 +1138,11 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
                 _reraise_size_limit(e, "TikTok video")
             error_msg = str(e)
 
+            if _tiktok_error_is_photo(error_msg, url):
+                file_path, metadata = await _load_tiktok_photos(url, temp_dir, None)
+                cleanup_on_error = False
+                return file_path, metadata
+
             # Check if it's an extraction error (likely temporary)
             if "Unable to extract" in error_msg or "webpage" in error_msg:
                 if attempt < retries - 1:
@@ -859,7 +1168,7 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
             raise Exception(f"TikTok download error: {error_msg}")
 
         except Exception as e:
-            if isinstance(e, DownloadTooLargeError):
+            if isinstance(e, (DownloadTooLargeError, DownloadRejectedError)):
                 if cleanup_on_error and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
                 raise
@@ -875,6 +1184,120 @@ async def download_tiktok_video(url: str, max_retries: int | None = None) -> tup
     if cleanup_on_error and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
     raise Exception(TIKTOK_ERROR_MESSAGE)
+
+
+async def download_twitch_video(url: str) -> tuple[str, dict]:
+    """Download a Twitch clip or a short VOD. Live channels are refused."""
+    kind = twitch_url_kind(url)
+    if kind == "channel":
+        raise DownloadRejectedError(TWITCH_LIVE_MESSAGE)
+    if kind not in {"clip", "vod"}:
+        raise DownloadRejectedError(TWITCH_ERROR_MESSAGE)
+
+    if kind == "vod":
+        format_option = "bestvideo[height<=720][vcodec^=avc1]+bestaudio/best[height<=720]/best"
+        max_duration: int | None = TWITCH_MAX_DURATION_SECONDS
+    else:
+        format_option = "bestvideo[vcodec^=avc1]+bestaudio/best"
+        max_duration = None
+
+    return await _download_bounded_video(
+        url,
+        label="Twitch video",
+        error_message=TWITCH_ERROR_MESSAGE,
+        format_option=format_option,
+        kind=kind,
+        max_duration=max_duration,
+        live_message=TWITCH_LIVE_MESSAGE,
+    )
+
+
+async def download_vk_video(url: str) -> tuple[str, dict]:
+    """Download a public VK video or clip."""
+    return await _download_bounded_video(
+        url,
+        label="VK video",
+        error_message=VK_ERROR_MESSAGE,
+        format_option="bestvideo[vcodec^=avc1]+bestaudio/best",
+        kind="clip",
+        max_duration=None,
+        live_message=VK_LIVE_MESSAGE,
+    )
+
+
+async def download_yandex_music(url: str) -> tuple[str, dict]:
+    """Download one Yandex Music track as mp3 with embedded cover when possible."""
+    if not YANDEX_MUSIC_TRACK_REGEX.search(url):
+        raise DownloadRejectedError(YANDEX_TRACK_ONLY_MESSAGE)
+
+    temp_dir = tempfile.mkdtemp()
+    cleanup_on_error = True
+    attempts = (
+        {
+            **YDLP_BASE_OPTS,
+            **_size_limit_opts(),
+            "format": "bestaudio/best",
+            "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
+            "writethumbnail": True,
+            "postprocessors": [
+                {"key": "FFmpegMetadata", "add_metadata": True},
+                {"key": "EmbedThumbnail"},
+            ],
+        },
+        {
+            **YDLP_BASE_OPTS,
+            **_size_limit_opts(),
+            "format": "bestaudio/best",
+            "outtmpl": f"{temp_dir}/%(id)s.%(ext)s",
+            "postprocessors": [{"key": "FFmpegMetadata", "add_metadata": True}],
+        },
+    )
+    try:
+        info: dict[str, Any] | None = None
+        last_error: Exception | None = None
+        for index, ydl_opts in enumerate(attempts):
+            _clear_temp_dir(temp_dir)
+            try:
+                with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+                    info = cast(
+                        "dict[str, Any]", await run_download(ydl.extract_info, url, False)
+                    )
+                    _ensure_size_within_limit(_get_expected_size(info), "Yandex Music")
+                    await run_download(ydl.download, [url])
+                last_error = None
+                break
+            except DownloadError as e:
+                _reraise_size_limit(e, "Yandex Music")
+                if "captcha" in str(e).lower():
+                    raise DownloadRejectedError(YANDEX_CAPTCHA_MESSAGE) from e
+                last_error = e
+                if index == 0 and "thumbnail" in str(e).lower():
+                    logger.info("Yandex thumbnail embed failed, retrying without cover")
+                    continue
+                raise Exception(YANDEX_ERROR_MESSAGE) from e
+        if last_error is not None or info is None:
+            raise Exception(YANDEX_ERROR_MESSAGE)
+
+        file_path = _find_downloaded_file(temp_dir)
+        _ensure_file_within_limit(file_path, "Yandex Music")
+        title_value = info.get("title")
+        title = title_value if isinstance(title_value, str) else "Unknown"
+        artist, track = _extract_metadata(info, title)
+        duration = info.get("duration") or 0
+        metadata = {
+            "title": title,
+            "artist": artist,
+            "track": track,
+            "duration": int(duration) if isinstance(duration, (int, float)) else 0,
+            "content_type": "audio",
+        }
+        cleanup_on_error = False
+        return file_path, metadata
+    except (DownloadTooLargeError, DownloadRejectedError):
+        raise
+    finally:
+        if cleanup_on_error and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 
 async def download_hls_host_video(url: str, max_retries: int | None = None) -> tuple[str, dict]:
@@ -1121,6 +1544,68 @@ async def send_image_content(
     )
 
     await event.respond(caption, file=file_path, reply_to=reply_to)
+
+
+async def send_tiktok_photos(
+    client,
+    chat_id: int,
+    metadata: dict,
+    bot_username: str = "",
+    *,
+    show_bot_caption: bool = True,
+    show_title: bool = True,
+    reply_to: int | None = None,
+) -> None:
+    """Send a TikTok photo series as albums of up to 10, then the music."""
+    paths = [path for path in (metadata.get("album_files") or []) if isinstance(path, str) and path]
+    audio_path = metadata.get("audio_path")
+    if not isinstance(audio_path, str) or not audio_path:
+        audio_path = None
+    caption = build_media_caption(
+        bot_username=bot_username,
+        title=metadata.get("title") if isinstance(metadata.get("title"), str) else None,
+        show_bot_caption=show_bot_caption,
+        show_title=show_title,
+    )
+    sent_caption = False
+
+    async def _send_chunk(chunk: list[str], cap: str | None) -> None:
+        if len(chunk) == 1:
+            await client.send_file(chat_id, chunk[0], caption=cap, reply_to=reply_to)
+            return
+        try:
+            await client.send_file(chat_id, chunk, caption=cap, reply_to=reply_to)
+        except Exception as e:
+            logger.warning("TikTok album send failed, falling back to singles: %s", e)
+            for index, path in enumerate(chunk):
+                await client.send_file(
+                    chat_id,
+                    path,
+                    caption=cap if index == 0 else None,
+                    reply_to=reply_to,
+                )
+
+    for offset in range(0, len(paths), _ALBUM_CHUNK):
+        chunk = paths[offset : offset + _ALBUM_CHUNK]
+        cap = caption if caption and not sent_caption else None
+        sent_caption = True
+        await _send_chunk(chunk, cap)
+
+    if audio_path:
+        duration = metadata.get("duration") or 0
+        audio_attr = DocumentAttributeAudio(
+            duration=int(duration) if isinstance(duration, (int, float)) else 0,
+            title=str(metadata.get("track") or metadata.get("title") or "TikTok"),
+            performer=str(metadata.get("artist") or "TikTok"),
+        )
+        await client.send_file(
+            chat_id,
+            audio_path,
+            caption=caption if caption and not paths else None,
+            attributes=[audio_attr],
+            reply_to=reply_to,
+            force_document=False,
+        )
 
 
 async def _download_media_with_gallery_dl(url: str, temp_dir: str) -> tuple[str, dict]:

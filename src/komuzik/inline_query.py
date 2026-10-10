@@ -5,7 +5,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .config import HLS_HOST_REGEX, PINTEREST_REGEX, TIKTOK_REGEX, TWITTER_REGEX, YOUTUBE_REGEX
+from .config import (
+    HLS_HOST_REGEX,
+    PINTEREST_REGEX,
+    TIKTOK_REGEX,
+    TWITCH_CHANNEL_REGEX,
+    TWITCH_CLIP_REGEX,
+    TWITCH_VOD_REGEX,
+    TWITTER_REGEX,
+    VK_VIDEO_REGEX,
+    YANDEX_MUSIC_REGEX,
+    YANDEX_MUSIC_TRACK_REGEX,
+    YOUTUBE_REGEX,
+)
 from .i18n import t
 
 ALLOWED_HEIGHTS = {360, 480, 720, 1080}
@@ -60,6 +72,11 @@ def parse_inline_query(
             or TWITTER_REGEX.search(candidate)
             or PINTEREST_REGEX.search(candidate)
             or HLS_HOST_REGEX.search(candidate)
+            or TWITCH_CLIP_REGEX.search(candidate)
+            or TWITCH_VOD_REGEX.search(candidate)
+            or TWITCH_CHANNEL_REGEX.search(candidate)
+            or VK_VIDEO_REGEX.search(candidate)
+            or YANDEX_MUSIC_REGEX.search(candidate)
         ):
             url_token = candidate
             break
@@ -67,7 +84,18 @@ def parse_inline_query(
 
     if not url_token:
         # Fallback: search whole text for a URL-like match
-        for regex in (YOUTUBE_REGEX, TIKTOK_REGEX, TWITTER_REGEX, PINTEREST_REGEX, HLS_HOST_REGEX):
+        for regex in (
+            YOUTUBE_REGEX,
+            TIKTOK_REGEX,
+            TWITTER_REGEX,
+            PINTEREST_REGEX,
+            HLS_HOST_REGEX,
+            TWITCH_CLIP_REGEX,
+            TWITCH_VOD_REGEX,
+            TWITCH_CHANNEL_REGEX,
+            VK_VIDEO_REGEX,
+            YANDEX_MUSIC_REGEX,
+        ):
             match = regex.search(text)
             if match:
                 url_token = _normalize_url(match.group(0))
@@ -75,6 +103,44 @@ def parse_inline_query(
 
     if not url_token:
         return None
+
+    if TWITCH_CHANNEL_REGEX.search(url_token) and not (
+        TWITCH_CLIP_REGEX.search(url_token) or TWITCH_VOD_REGEX.search(url_token)
+    ):
+        return ParsedInlineQuery(
+            url=url_token,
+            platform="twitch",
+            mode="video",
+            quality="auto",
+            description=t("inline.job.twitch_live"),
+        )
+
+    if TWITCH_CLIP_REGEX.search(url_token) or TWITCH_VOD_REGEX.search(url_token):
+        return ParsedInlineQuery(
+            url=url_token,
+            platform="twitch",
+            mode="video",
+            quality="auto",
+            description=t("inline.job.twitch"),
+        )
+
+    if VK_VIDEO_REGEX.search(url_token):
+        return ParsedInlineQuery(
+            url=url_token,
+            platform="vk",
+            mode="video",
+            quality="auto",
+            description=t("inline.job.vk"),
+        )
+
+    if YANDEX_MUSIC_REGEX.search(url_token):
+        return ParsedInlineQuery(
+            url=url_token,
+            platform="yandex",
+            mode="audio" if YANDEX_MUSIC_TRACK_REGEX.search(url_token) else "video",
+            quality="high",
+            description=t("inline.job.yandex"),
+        )
 
     if TIKTOK_REGEX.search(url_token):
         return ParsedInlineQuery(

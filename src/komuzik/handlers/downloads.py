@@ -15,14 +15,22 @@ from ..config import (
     HLS_HOST_REGEX,
     PINTEREST_REGEX,
     TIKTOK_REGEX,
+    TWITCH_CHANNEL_REGEX,
+    TWITCH_CLIP_REGEX,
+    TWITCH_VOD_REGEX,
     TWITTER_REGEX,
+    VK_VIDEO_REGEX,
+    YANDEX_MUSIC_REGEX,
     YOUTUBE_REGEX,
 )
 from ..downloaders import (
     download_hls_host_video,
     download_pinterest_content,
     download_tiktok_video,
+    download_twitch_video,
     download_twitter_video,
+    download_vk_video,
+    download_yandex_music,
     download_youtube_audio,
     download_youtube_video,
     enrich_youtube_search_stats,
@@ -30,11 +38,12 @@ from ..downloaders import (
     search_youtube,
     send_audio_content,
     send_image_content,
+    send_tiktok_photos,
     send_video_content,
 )
 from ..i18n import t
 from ..inline_query import parse_inline_query
-from ..link_extract import extract_media_urls
+from ..link_extract import ensure_http_url, extract_media_urls
 from ..playlist import find_playlist_url
 from ..search_preview import render_search_preview_async
 from ..user_errors import format_download_error
@@ -159,6 +168,27 @@ class DownloadsMixin:
             await self._handle_pinterest(event, pinterest_match.group(0))
             return
 
+        # Check for Twitch (clips, VODs, bare channel pages)
+        twitch_match = TWITCH_CLIP_REGEX.search(text) or TWITCH_VOD_REGEX.search(text)
+        if twitch_match:
+            await self._handle_twitch(event, ensure_http_url(twitch_match.group(0)))
+            return
+        if TWITCH_CHANNEL_REGEX.search(text) and not extract_media_urls(text):
+            await event.respond(t("errors.twitch_live"))
+            return
+
+        # Check for VK video / clip
+        vk_match = VK_VIDEO_REGEX.search(text)
+        if vk_match:
+            await self._handle_vk(event, ensure_http_url(vk_match.group(0)))
+            return
+
+        # Check for Yandex Music
+        yandex_match = YANDEX_MUSIC_REGEX.search(text)
+        if yandex_match:
+            await self._handle_yandex(event, ensure_http_url(yandex_match.group(0)))
+            return
+
         # Check for TikTok
         tiktok_match = TIKTOK_REGEX.search(text)
         if tiktok_match:
@@ -233,7 +263,17 @@ class DownloadsMixin:
                     "show_title": chat_settings.show_title,
                     "reply_to": reply_to,
                 }
-                if media_kind == "audio":
+                if media_kind == "album":
+                    await send_tiktok_photos(
+                        client,
+                        int(event.chat_id),
+                        metadata,
+                        self.bot_username,
+                        show_bot_caption=chat_settings.show_bot_caption,
+                        show_title=chat_settings.show_title,
+                        reply_to=reply_to,
+                    )
+                elif media_kind == "audio":
                     await send_audio_content(
                         event, file_path, metadata, self.bot_username, **caption_kwargs
                     )
@@ -288,10 +328,91 @@ class DownloadsMixin:
             status_text=t("download.tiktok.status"),
             error_context=t("download.tiktok.error"),
             download=lambda: download_tiktok_video(url),
-            send=self._send_video_media,
+            send=self._send_media_by_content_type,
             track=self.stats.track_tiktok_download,
             action="video",
             log_label="TikTok video",
+        )
+
+    async def _handle_twitch(self, event: Message, url: str):
+        """Handle a Twitch clip or VOD."""
+
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
+            self.stats.track_video_download(
+                user_id,
+                "best",
+                "twitch",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
+            )
+
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text=t("download.twitch.status"),
+            error_context=t("download.twitch.error"),
+            download=lambda: download_twitch_video(url),
+            send=self._send_video_media,
+            track=track,
+            action="video",
+            log_label="Twitch video",
+        )
+
+    async def _handle_vk(self, event: Message, url: str):
+        """Handle a VK video or clip."""
+
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
+            self.stats.track_video_download(
+                user_id,
+                "best",
+                "vk",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
+            )
+
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text=t("download.vk.status"),
+            error_context=t("download.vk.error"),
+            download=lambda: download_vk_video(url),
+            send=self._send_video_media,
+            track=track,
+            action="video",
+            log_label="VK video",
+        )
+
+    async def _handle_yandex(self, event: Message, url: str):
+        """Handle a Yandex Music track link."""
+
+        def track(user_id, username, *, success, error_message=None, url=None, title=None):
+            self.stats.track_audio_download(
+                user_id,
+                "high",
+                username,
+                success=success,
+                error_message=error_message,
+                url=url,
+                title=title,
+                platform="yandex",
+            )
+
+        await self._download_and_send_content(
+            event,
+            url,
+            status_text=t("download.yandex.status"),
+            error_context=t("download.yandex.error"),
+            download=lambda: download_yandex_music(url),
+            send=self._send_audio_media,
+            track=track,
+            action="audio",
+            log_label="Yandex Music",
         )
 
     async def _handle_hls_host(self, event: Message, url: str):
