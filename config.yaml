@@ -29,7 +29,7 @@ tiktok:
 # Параметры Twitch
 twitch:
   # Записи длиннее этого (сек) не качаем: поток без конца легко упирается в лимит размера.
-  max_duration_seconds: 1800
+  max_duration_seconds: 10800
 
 # Параметры Twitter/X
 twitter:

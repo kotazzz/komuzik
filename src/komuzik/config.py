@@ -125,7 +125,7 @@ TWITCH_SETTINGS = _config.get_section("twitch")
 
 # Public VODs are HLS and often multi-hour. Refuse anything longer than this
 # when the duration is known, and refuse a VOD whose length we cannot see.
-TWITCH_MAX_DURATION_SECONDS = int(TWITCH_SETTINGS.get("max_duration_seconds", 1800))
+TWITCH_MAX_DURATION_SECONDS = int(TWITCH_SETTINGS.get("max_duration_seconds", 10800))
 
 # ============= Twitter/X Settings =============
 TWITTER_SETTINGS = _config.get_section("twitter")
